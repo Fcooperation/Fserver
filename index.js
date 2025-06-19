@@ -1,22 +1,12 @@
-const express = require('express');
-const fs = require('fs');
-const path = require('path');
+// index.js
+const http = require('http');
 
-const app = express();
-const PORT = process.env.PORT || 3000;
-
-app.use(express.static(__dirname)); // serves frontend.html
-
-app.get('/api/results', (req, res) => {
-  const filePath = path.join(__dirname, 'search_index.json');
-  if (fs.existsSync(filePath)) {
-    const data = fs.readFileSync(filePath, 'utf-8');
-    res.json(JSON.parse(data));
-  } else {
-    res.json([]);
-  }
+const server = http.createServer((req, res) => {
+  res.writeHead(200, { 'Content-Type': 'text/plain' });
+  res.end('Hello, World from Fweb!');
 });
 
-app.listen(PORT, () => {
-  console.log(`🌐 Fweb server running on port ${PORT}`);
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => {
+  console.log(`🚀 Server running on port ${PORT}`);
 });
