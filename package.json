@@ -2,11 +2,8 @@
   "name": "fserver",
   "version": "1.0.0",
   "main": "index.js",
-  "type": "commonjs",
   "scripts": {
     "start": "node index.js"
   },
-  "dependencies": {
-    "puppeteer": "^21.3.8"
-  }
+  "dependencies": {}
 }
