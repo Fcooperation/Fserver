@@ -1,18 +1,30 @@
-const puppeteer = require('puppeteer');
+const chromium = require('chrome-aws-lambda');
+const puppeteer = require('puppeteer-core');
 
 (async () => {
-  console.log("Launching headless browser...");
+  let browser = null;
 
-  const browser = await puppeteer.launch({
-    headless: true,
-    args: ['--no-sandbox', '--disable-setuid-sandbox'],
-  });
+  try {
+    console.log("🚀 Launching Puppeteer");
 
-  const page = await browser.newPage();
-  await page.goto('https://example.com');
+    browser = await puppeteer.launch({
+      args: chromium.args,
+      defaultViewport: chromium.defaultViewport,
+      executablePath: await chromium.executablePath,
+      headless: chromium.headless,
+    });
 
-  const title = await page.title();
-  console.log("Page title is:", title);
+    const page = await browser.newPage();
+    await page.goto('https://example.com', { waitUntil: 'domcontentloaded' });
 
-  await browser.close();
+    const title = await page.title();
+    console.log('✅ Title:', title);
+
+  } catch (err) {
+    console.error('❌ Error:', err.message);
+  } finally {
+    if (browser !== null) {
+      await browser.close();
+    }
+  }
 })();
