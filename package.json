@@ -6,7 +6,6 @@
     "start": "node index.js"
   },
   "dependencies": {
-    "puppeteer-core": "^10.1.0",
-    "chrome-aws-lambda": "^10.1.0"
+    "puppeteer": "^21.3.8"
   }
 }
