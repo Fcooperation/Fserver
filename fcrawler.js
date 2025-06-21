@@ -7,10 +7,16 @@ const puppeteer = require('puppeteer-core');
   try {
     console.log("🚀 Launching Puppeteer");
 
+    const executablePath = await chromium.executablePath;
+
+    if (!executablePath) {
+      throw new Error("Chrome executable not found");
+    }
+
     browser = await puppeteer.launch({
       args: chromium.args,
       defaultViewport: chromium.defaultViewport,
-      executablePath: await chromium.executablePath,
+      executablePath: executablePath,
       headless: chromium.headless,
     });
 
