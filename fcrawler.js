@@ -1,12 +1,14 @@
 // fcrawler.js
-const puppeteer = require('puppeteer');
+const chromium = require('chrome-aws-lambda');
+const puppeteer = require('puppeteer-core');
 
 (async () => {
-  console.log("Launching Puppeteer...");
+  console.log("Launching headless browser...");
 
   const browser = await puppeteer.launch({
-    headless: true, // headless mode (no GUI)
-    args: ['--no-sandbox', '--disable-setuid-sandbox'] // required for Render
+    args: chromium.args,
+    executablePath: await chromium.executablePath,
+    headless: chromium.headless,
   });
 
   const page = await browser.newPage();
