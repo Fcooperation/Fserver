@@ -1,122 +1,126 @@
-const axios = require('axios');
-const cheerio = require('cheerio');
-const robotsParser = require('robots-parser');
-const xml2js = require('xml2js');
-const fs = require('fs');
-const path = require('path');
+import axios from 'axios';
+import cheerio from 'cheerio';
+import robotsParser from 'robots-parser';
+import { parseSitemapsFromRobots } from 'sitemap';
+import fs from 'fs/promises';
+import path from 'path';
+import { existsSync } from 'fs';
 
-const MAX_PAGES = 10;
 const visited = new Set();
 const searchIndex = [];
+const MAX_PAGES = 10;
 
-async function fetchRobots(origin, userAgent = 'fcrawler') {
+const delay = ms => new Promise(resolve => setTimeout(resolve, ms));
+
+async function getRobotsTxt(url) {
   try {
-    const robotsUrl = `${origin}/robots.txt`;
+    const robotsUrl = new URL('/robots.txt', url).href;
     const res = await axios.get(robotsUrl, { timeout: 5000 });
     return robotsParser(robotsUrl, res.data);
   } catch {
-    return robotsParser('', ''); // Default to allow all
+    return robotsParser('', '');
   }
 }
 
-async function obeyCrawlDelay(robots, userAgent) {
+async function getCrawlDelay(robots, userAgent = 'fcrawler') {
   const delay = robots.getCrawlDelay(userAgent);
-  if (delay) {
-    console.log(`⏳ Waiting ${delay}s per robots.txt...`);
-    await new Promise(resolve => setTimeout(resolve, delay * 1000));
+  return (delay || 1) * 1000;
+}
+
+async function fetchAndSavePage(url) {
+  try {
+    const res = await axios.get(url, { timeout: 10000 });
+    const $ = cheerio.load(res.data);
+
+    const title = $('title').text() || 'Untitled';
+    const filename = `${encodeURIComponent(url).slice(0, 50)}.html`;
+    const filepath = path.join('crawled', filename);
+
+    await fs.mkdir('crawled', { recursive: true });
+    await fs.writeFile(filepath, $.html(), 'utf8');
+
+    searchIndex.push({ url, title, filename });
+    console.log(`✅ Saved: ${url}`);
+  } catch (err) {
+    console.log(`❌ Error crawling ${url}: ${err.message}`);
   }
 }
 
-async function saveHtml(url, html) {
-  const filename = `${visited.size}.html`;
-  const dir = path.join(__dirname, 'crawled');
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir); // ✅ create 'crawled' folder
-
-  fs.writeFileSync(path.join(dir, filename), html);
-  const $ = cheerio.load(html);
-
-  searchIndex.push({
-    url,
-    title: $('title').text(),
-    filename,
+async function crawlLinks($, baseUrl, robots, delayMs) {
+  const links = new Set();
+  $('a[href]').each((_, el) => {
+    let link = $(el).attr('href');
+    if (!link) return;
+    try {
+      const fullUrl = new URL(link, baseUrl).href;
+      if (!visited.has(fullUrl) && robots.isAllowed(fullUrl, 'fcrawler')) {
+        links.add(fullUrl);
+      }
+    } catch {}
   });
 
-  console.log(`💾 Saved: ${url} → ${filename}`);
+  for (const link of links) {
+    if (visited.size >= MAX_PAGES) return;
+    visited.add(link);
+    await delay(delayMs);
+    await crawlPage(link);
+  }
 }
 
-async function crawlPage(url, userAgent = 'fcrawler') {
-  if (visited.size >= MAX_PAGES || visited.has(url)) return;
-  visited.add(url);
-
+async function crawlPage(url) {
   try {
-    const { origin } = new URL(url);
-    const robots = await fetchRobots(origin, userAgent);
+    const robots = await getRobotsTxt(url);
+    const delayMs = await getCrawlDelay(robots, 'fcrawler');
 
-    if (!robots.isAllowed(url, userAgent)) {
-      console.log(`⛔ Blocked by robots.txt: ${url}`);
+    if (!robots.isAllowed(url, 'fcrawler')) {
+      console.log(`🚫 Disallowed by robots.txt: ${url}`);
       return;
     }
 
-    await obeyCrawlDelay(robots, userAgent);
-
+    await delay(delayMs);
     const res = await axios.get(url, { timeout: 10000 });
-    await saveHtml(url, res.data);
-
     const $ = cheerio.load(res.data);
-    const links = $('a')
-      .map((i, el) => $(el).attr('href'))
-      .get()
-      .filter(link => link && link.startsWith('http'));
-
-    for (const link of links) {
-      if (visited.size >= MAX_PAGES) break;
-      await crawlPage(link, userAgent);
-    }
+    await fetchAndSavePage(url);
+    await crawlLinks($, url, robots, delayMs);
   } catch (err) {
-    console.log(`⚠️ Failed to crawl: ${url} - ${err.message}`);
+    console.log(`⚠️ Failed to crawl ${url}: ${err.message}`);
   }
 }
 
-async function parseSitemaps(siteUrl) {
-  try {
-    const origin = new URL(siteUrl).origin;
-    const robotsUrl = `${origin}/robots.txt`;
+export async function crawlSite(startUrl) {
+  visited.clear();
+  searchIndex.length = 0;
 
-    const robotsRes = await axios.get(robotsUrl, { timeout: 5000 });
-    const robots = robotsParser(robotsUrl, robotsRes.data);
+  const robots = await getRobotsTxt(startUrl);
+  const delayMs = await getCrawlDelay(robots, 'fcrawler');
+  const sitemaps = robots.getSitemaps();
 
-    const sitemaps = robots.getSitemaps();
-    if (sitemaps.length === 0) {
-      console.log('⚠️ No sitemaps found. Crawling homepage only...');
-      await crawlPage(siteUrl);
-    } else {
-      for (const sitemapUrl of sitemaps) {
-        try {
-          const sitemapRes = await axios.get(sitemapUrl, { timeout: 10000 });
-          const parsed = await xml2js.parseStringPromise(sitemapRes.data);
+  if (sitemaps.length) {
+    console.log(`🗺️ Found ${sitemaps.length} sitemap(s)`);
+    for (const sitemapUrl of sitemaps) {
+      try {
+        const res = await axios.get(sitemapUrl, { timeout: 10000 });
+        const urls = await parseSitemapsFromRobots(res.data);
 
-          const urls = parsed.urlset?.url?.map(u => u.loc[0]) || [];
-
-          for (const u of urls) {
-            if (visited.size >= MAX_PAGES) break;
-            await crawlPage(u);
+        for (const pageUrl of urls) {
+          if (visited.size >= MAX_PAGES) break;
+          if (!visited.has(pageUrl) && robots.isAllowed(pageUrl, 'fcrawler')) {
+            visited.add(pageUrl);
+            await delay(delayMs);
+            await crawlPage(pageUrl);
           }
-        } catch (err) {
-          console.log(`⚠️ Failed to parse sitemap: ${sitemapUrl}`);
         }
+      } catch (err) {
+        console.log(`⚠️ Sitemap error: ${err.message}`);
       }
     }
-
-    // ✅ Make sure crawled/ exists
-    const dir = path.join(__dirname, 'crawled');
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir);
-
-    // ✅ Save search index
-    fs.writeFileSync(path.join(dir, 'search_index.json'), JSON.stringify(searchIndex, null, 2));
-    console.log('✅ Crawl complete. Search index saved.');
-  } catch (err) {
-    console.log(`❌ Error during sitemap parsing: ${err.message}`);
+  } else {
+    await crawlPage(startUrl);
   }
-}
 
-module.exports = { parseSitemaps };
+  await fs.writeFile(
+    'crawled/search_index.json',
+    JSON.stringify(searchIndex, null, 2)
+  );
+  console.log('✅ Crawl complete. Search index saved.');
+}
