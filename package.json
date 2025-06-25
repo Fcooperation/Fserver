@@ -1,16 +1,15 @@
 {
-  "name": "fweb-crawler",
+  "name": "fserver",
   "version": "1.0.0",
-  "main": "index.js",
   "type": "module",
+  "main": "index.js",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "axios": "^1.6.7",
+    "axios": "^1.6.8",
     "cheerio": "^1.0.0-rc.12",
     "express": "^4.19.2",
-    "robots-parser": "^2.1.2",
-    "sitemap": "^7.1.0"
+    "robots-parser": "^3.1.0"
   }
 }
