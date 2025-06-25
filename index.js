@@ -1,17 +1,14 @@
-const express = require('express');
-const { parseSitemaps } = require('./fcrawler');
+import express from 'express';
+import { crawlSite } from './fcrawler.js';
 
 const app = express();
-const PORT = process.env.PORT || 3000;
+const PORT = process.env.PORT || 10000;
 
-// 👇 Start the crawler
-parseSitemaps('https://www.google.com'); // or replace with any test site
-
-// 👇 Keep the server alive
 app.get('/', (req, res) => {
-  res.send('Fweb crawler is running...');
+  res.send('🌍 Fweb Crawler is Live');
 });
 
 app.listen(PORT, () => {
   console.log(`🌐 Server listening on port ${PORT}`);
+  crawlSite('https://example.com'); // Replace with your start URL
 });
