@@ -1,121 +1,122 @@
-import axios from 'axios';
-import cheerio from 'cheerio';
-import fs from 'fs';
-import path from 'path';
-import robotsParser from 'robots-parser';
-import { URL } from 'url';
-import { parseSitemap } from 'sitemap';
+const axios = require('axios');
+const cheerio = require('cheerio');
+const robotsParser = require('robots-parser');
+const xml2js = require('xml2js');
+const fs = require('fs');
+const path = require('path');
 
 const MAX_PAGES = 10;
 const visited = new Set();
 const searchIndex = [];
 
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function getRobots(url) {
+async function fetchRobots(origin, userAgent = 'fcrawler') {
   try {
-    const robotsUrl = new URL('/robots.txt', url).href;
-    const res = await axios.get(robotsUrl);
+    const robotsUrl = `${origin}/robots.txt`;
+    const res = await axios.get(robotsUrl, { timeout: 5000 });
     return robotsParser(robotsUrl, res.data);
   } catch {
-    return robotsParser('', '');
+    return robotsParser('', ''); // Default to allow all
   }
 }
 
-async function getSitemapUrls(robots, baseUrl) {
-  const sitemaps = robots.getSitemaps() || [];
-  const allUrls = [];
-
-  for (const sitemapUrl of sitemaps) {
-    try {
-      const res = await axios.get(sitemapUrl);
-      const links = await parseSitemap(res.data);
-      links.forEach(link => {
-        if (link.url && !visited.has(link.url)) {
-          allUrls.push(link.url);
-        }
-      });
-    } catch (e) {
-      console.warn(`❌ Failed to parse sitemap ${sitemapUrl}`);
-    }
-  }
-
-  return allUrls;
-}
-
-async function crawlPage(url, userAgent) {
-  try {
-    const res = await axios.get(url, {
-      headers: { 'User-Agent': userAgent }
-    });
-
-    const $ = cheerio.load(res.data);
-    const title = $('title').text() || 'untitled';
-    const body = $('body').html() || '';
-    const filename = `crawled/${Buffer.from(url).toString('hex')}.html`;
-
-    fs.writeFileSync(filename, `<!DOCTYPE html><html><head><title>${title}</title></head><body>${body}</body></html>`);
-
-    searchIndex.push({ url, title, filename, text: $('body').text().slice(0, 500) });
-
-    const links = [];
-    $('a[href]').each((_, a) => {
-      let link = $(a).attr('href');
-      try {
-        link = new URL(link, url).href;
-        if (!visited.has(link)) links.push(link);
-      } catch {}
-    });
-
-    return links;
-  } catch (err) {
-    console.warn(`❌ Failed to crawl ${url}: ${err.message}`);
-    return [];
+async function obeyCrawlDelay(robots, userAgent) {
+  const delay = robots.getCrawlDelay(userAgent);
+  if (delay) {
+    console.log(`⏳ Waiting ${delay}s per robots.txt...`);
+    await new Promise(resolve => setTimeout(resolve, delay * 1000));
   }
 }
 
-export async function crawlWebsite(startUrl, userAgent = 'fcrawler') {
-  const robots = await getRobots(startUrl);
-  const queue = new Set();
+async function saveHtml(url, html) {
+  const filename = `${visited.size}.html`;
+  const dir = path.join(__dirname, 'crawled');
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir); // ✅ create 'crawled' folder
 
-  visited.add(startUrl);
-  queue.add(startUrl);
+  fs.writeFileSync(path.join(dir, filename), html);
+  const $ = cheerio.load(html);
 
-  // 1. Add sitemap URLs
-  const sitemapUrls = await getSitemapUrls(robots, startUrl);
-  sitemapUrls.forEach(url => {
-    if (!visited.has(url)) {
-      queue.add(url);
-      visited.add(url);
-    }
+  searchIndex.push({
+    url,
+    title: $('title').text(),
+    filename,
   });
 
-  if (!fs.existsSync('crawled')) fs.mkdirSync('crawled');
+  console.log(`💾 Saved: ${url} → ${filename}`);
+}
 
-  while (queue.size && visited.size < MAX_PAGES) {
-    const [url] = queue;
-    queue.delete(url);
+async function crawlPage(url, userAgent = 'fcrawler') {
+  if (visited.size >= MAX_PAGES || visited.has(url)) return;
+  visited.add(url);
+
+  try {
+    const { origin } = new URL(url);
+    const robots = await fetchRobots(origin, userAgent);
 
     if (!robots.isAllowed(url, userAgent)) {
       console.log(`⛔ Blocked by robots.txt: ${url}`);
-      continue;
+      return;
     }
 
-    const delay = robots.getCrawlDelay(userAgent) || 1;
-    console.log(`⏳ Waiting ${delay}s before crawling ${url}`);
-    await sleep(delay * 1000);
+    await obeyCrawlDelay(robots, userAgent);
 
-    const foundLinks = await crawlPage(url, userAgent);
-    for (const link of foundLinks) {
-      if (!visited.has(link)) {
-        queue.add(link);
-        visited.add(link);
+    const res = await axios.get(url, { timeout: 10000 });
+    await saveHtml(url, res.data);
+
+    const $ = cheerio.load(res.data);
+    const links = $('a')
+      .map((i, el) => $(el).attr('href'))
+      .get()
+      .filter(link => link && link.startsWith('http'));
+
+    for (const link of links) {
+      if (visited.size >= MAX_PAGES) break;
+      await crawlPage(link, userAgent);
+    }
+  } catch (err) {
+    console.log(`⚠️ Failed to crawl: ${url} - ${err.message}`);
+  }
+}
+
+async function parseSitemaps(siteUrl) {
+  try {
+    const origin = new URL(siteUrl).origin;
+    const robotsUrl = `${origin}/robots.txt`;
+
+    const robotsRes = await axios.get(robotsUrl, { timeout: 5000 });
+    const robots = robotsParser(robotsUrl, robotsRes.data);
+
+    const sitemaps = robots.getSitemaps();
+    if (sitemaps.length === 0) {
+      console.log('⚠️ No sitemaps found. Crawling homepage only...');
+      await crawlPage(siteUrl);
+    } else {
+      for (const sitemapUrl of sitemaps) {
+        try {
+          const sitemapRes = await axios.get(sitemapUrl, { timeout: 10000 });
+          const parsed = await xml2js.parseStringPromise(sitemapRes.data);
+
+          const urls = parsed.urlset?.url?.map(u => u.loc[0]) || [];
+
+          for (const u of urls) {
+            if (visited.size >= MAX_PAGES) break;
+            await crawlPage(u);
+          }
+        } catch (err) {
+          console.log(`⚠️ Failed to parse sitemap: ${sitemapUrl}`);
+        }
       }
     }
-  }
 
-  fs.writeFileSync('search_index.json', JSON.stringify(searchIndex, null, 2));
-  console.log('✅ Crawl complete. Search index saved.');
+    // ✅ Make sure crawled/ exists
+    const dir = path.join(__dirname, 'crawled');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir);
+
+    // ✅ Save search index
+    fs.writeFileSync(path.join(dir, 'search_index.json'), JSON.stringify(searchIndex, null, 2));
+    console.log('✅ Crawl complete. Search index saved.');
+  } catch (err) {
+    console.log(`❌ Error during sitemap parsing: ${err.message}`);
+  }
 }
+
+module.exports = { parseSitemaps };
