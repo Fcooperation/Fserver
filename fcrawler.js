@@ -2,7 +2,7 @@
 const axios = require('axios');
 const robotsParser = require('robots-parser');
 
-async function testRobots(url = 'https://example.com', userAgent = 'Googlebot') {
+async function testRobots(url = 'https://www.google.com/search', userAgent = 'fcrawler') {
   try {
     const { origin } = new URL(url);
     const robotsUrl = `${origin}/robots.txt`;
@@ -19,5 +19,4 @@ async function testRobots(url = 'https://example.com', userAgent = 'Googlebot') 
   }
 }
 
-// Run immediately when required
 testRobots();
