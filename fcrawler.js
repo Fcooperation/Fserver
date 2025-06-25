@@ -15,7 +15,7 @@ async function fetchRobots(origin, userAgent = 'fcrawler') {
     const res = await axios.get(robotsUrl, { timeout: 5000 });
     return robotsParser(robotsUrl, res.data);
   } catch {
-    return robotsParser('', ''); // Allow all if robots.txt fails
+    return robotsParser('', ''); // Default to allow all
   }
 }
 
@@ -30,7 +30,7 @@ async function obeyCrawlDelay(robots, userAgent) {
 async function saveHtml(url, html) {
   const filename = `${visited.size}.html`;
   const dir = path.join(__dirname, 'crawled');
-  if (!fs.existsSync(dir)) fs.mkdirSync(dir);
+  if (!fs.existsSync(dir)) fs.mkdirSync(dir); // ✅ create 'crawled' folder
 
   fs.writeFileSync(path.join(dir, filename), html);
   const $ = cheerio.load(html);
@@ -107,8 +107,12 @@ async function parseSitemaps(siteUrl) {
       }
     }
 
-    // Save search index
-    fs.writeFileSync(path.join(__dirname, 'crawled', 'search_index.json'), JSON.stringify(searchIndex, null, 2));
+    // ✅ Make sure crawled/ exists
+    const dir = path.join(__dirname, 'crawled');
+    if (!fs.existsSync(dir)) fs.mkdirSync(dir);
+
+    // ✅ Save search index
+    fs.writeFileSync(path.join(dir, 'search_index.json'), JSON.stringify(searchIndex, null, 2));
     console.log('✅ Crawl complete. Search index saved.');
   } catch (err) {
     console.log(`❌ Error during sitemap parsing: ${err.message}`);
