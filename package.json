@@ -10,7 +10,7 @@
     "axios": "^1.6.7",
     "cheerio": "^1.0.0-rc.12",
     "express": "^4.19.2",
-    "robots-parser": "^3.3.0",
+    "robots-parser": "^2.1.2",
     "sitemap": "^7.1.0"
   }
 }
