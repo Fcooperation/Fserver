@@ -1,36 +1,23 @@
-const chromium = require('chrome-aws-lambda');
-const puppeteer = require('puppeteer-core');
+// fcrawler.js
+const axios = require('axios');
+const robotsParser = require('robots-parser');
 
-(async () => {
-  let browser = null;
-
+async function testRobots(url = 'https://example.com', userAgent = 'Googlebot') {
   try {
-    console.log("🚀 Launching Puppeteer");
+    const { origin } = new URL(url);
+    const robotsUrl = `${origin}/robots.txt`;
 
-    const executablePath = await chromium.executablePath;
+    const res = await axios.get(robotsUrl);
+    const robots = robotsParser(robotsUrl, res.data);
 
-    if (!executablePath) {
-      throw new Error('❌ Chrome executable not found via chrome-aws-lambda.');
-    }
+    const isAllowed = robots.isAllowed(url, userAgent);
 
-    browser = await puppeteer.launch({
-      args: chromium.args,
-      defaultViewport: chromium.defaultViewport,
-      executablePath: executablePath,
-      headless: chromium.headless,
-    });
-
-    const page = await browser.newPage();
-    await page.goto('https://example.com', { waitUntil: 'domcontentloaded' });
-
-    const title = await page.title();
-    console.log('✅ Title:', title);
-
+    console.log(`✅ ${url} is ${isAllowed ? 'ALLOWED' : 'BLOCKED'} for ${userAgent}`);
   } catch (err) {
-    console.error('❌ Error:', err.message);
-  } finally {
-    if (browser !== null) {
-      await browser.close();
-    }
+    console.error(`❌ Failed to check robots.txt for ${url}`);
+    console.error(err.message);
   }
-})();
+}
+
+// Run immediately when required
+testRobots();
