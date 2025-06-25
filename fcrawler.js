@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import robotsParser from 'robots-parser';
 import { URL } from 'url';
+import { parseSitemap } from 'sitemap';
 
 const MAX_PAGES = 10;
 const visited = new Set();
@@ -19,8 +20,29 @@ async function getRobots(url) {
     const res = await axios.get(robotsUrl);
     return robotsParser(robotsUrl, res.data);
   } catch {
-    return robotsParser('', ''); // Allow all if no robots
+    return robotsParser('', '');
   }
+}
+
+async function getSitemapUrls(robots, baseUrl) {
+  const sitemaps = robots.getSitemaps() || [];
+  const allUrls = [];
+
+  for (const sitemapUrl of sitemaps) {
+    try {
+      const res = await axios.get(sitemapUrl);
+      const links = await parseSitemap(res.data);
+      links.forEach(link => {
+        if (link.url && !visited.has(link.url)) {
+          allUrls.push(link.url);
+        }
+      });
+    } catch (e) {
+      console.warn(`❌ Failed to parse sitemap ${sitemapUrl}`);
+    }
+  }
+
+  return allUrls;
 }
 
 async function crawlPage(url, userAgent) {
@@ -56,13 +78,25 @@ async function crawlPage(url, userAgent) {
 
 export async function crawlWebsite(startUrl, userAgent = 'fcrawler') {
   const robots = await getRobots(startUrl);
-  const queue = [startUrl];
+  const queue = new Set();
+
   visited.add(startUrl);
+  queue.add(startUrl);
+
+  // 1. Add sitemap URLs
+  const sitemapUrls = await getSitemapUrls(robots, startUrl);
+  sitemapUrls.forEach(url => {
+    if (!visited.has(url)) {
+      queue.add(url);
+      visited.add(url);
+    }
+  });
 
   if (!fs.existsSync('crawled')) fs.mkdirSync('crawled');
 
-  while (queue.length && visited.size < MAX_PAGES) {
-    const url = queue.shift();
+  while (queue.size && visited.size < MAX_PAGES) {
+    const [url] = queue;
+    queue.delete(url);
 
     if (!robots.isAllowed(url, userAgent)) {
       console.log(`⛔ Blocked by robots.txt: ${url}`);
@@ -76,7 +110,7 @@ export async function crawlWebsite(startUrl, userAgent = 'fcrawler') {
     const foundLinks = await crawlPage(url, userAgent);
     for (const link of foundLinks) {
       if (!visited.has(link)) {
-        queue.push(link);
+        queue.add(link);
         visited.add(link);
       }
     }
