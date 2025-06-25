@@ -1,17 +1,17 @@
 const express = require('express');
-const { testRobots } = require('./fcrawler');
+const { parseSitemaps } = require('./fcrawler');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-// Trigger the robots test immediately
-testRobots('https://www.google.com/search', 'fcrawler');
+// 👇 Start the crawler
+parseSitemaps('https://www.google.com'); // or replace with any test site
 
+// 👇 Keep the server alive
 app.get('/', (req, res) => {
-  res.send('Fweb is online and crawling... ✅');
+  res.send('Fweb crawler is running...');
 });
 
-// Prevent timeout by opening a port
 app.listen(PORT, () => {
-  console.log(`🌐 Server running on port ${PORT}`);
+  console.log(`🌐 Server listening on port ${PORT}`);
 });
