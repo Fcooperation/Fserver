@@ -1,88 +1,83 @@
-import axios from 'axios';
-import cheerio from 'cheerio';
-import fs from 'fs/promises';
+import fs from 'fs';
 import path from 'path';
+import axios from 'axios';
+import * as cheerio from 'cheerio';
 import robotsParser from 'robots-parser';
-import { URL } from 'url';
+import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const crawledDir = path.join(__dirname, 'crawled');
+const indexPath = path.join(crawledDir, 'search_index.json');
 const visited = new Set();
-const maxPages = 10;
-const agent = 'fcrawler';
+const MAX_PAGES = 10;
 
-async function getRobotsInfo(baseURL) {
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function getRobotsData(url) {
   try {
-    const robotsUrl = new URL('/robots.txt', baseURL).href;
-    const res = await axios.get(robotsUrl, { timeout: 5000 });
+    const robotsUrl = new URL('/robots.txt', url).href;
+    const res = await axios.get(robotsUrl);
     const robots = robotsParser(robotsUrl, res.data);
-    return { robots, crawlDelay: 0 }; // crawl-delay not parsed by robots-parser
+    return {
+      parser: robots,
+      delay: robots.getCrawlDelay('fcrawler') || 2000
+    };
   } catch {
-    return { robots: null, crawlDelay: 0 };
+    return { parser: { isAllowed: () => true }, delay: 2000 };
   }
 }
 
-function sanitizeFilename(url) {
-  return url.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 100);
-}
-
-async function saveHtml(url, html) {
-  const filename = sanitizeFilename(url) + '.html';
-  const filepath = path.join('crawled', filename);
-  await fs.mkdir('crawled', { recursive: true });
-  await fs.writeFile(filepath, html);
-  return filename;
-}
-
-async function updateSearchIndex({ url, title, filename }) {
-  const filePath = 'crawled/search_index.json';
-  let index = [];
-  try {
-    const existing = await fs.readFile(filePath, 'utf-8');
-    index = JSON.parse(existing);
-  } catch {}
-  index.push({ url, title, filename });
-  await fs.writeFile(filePath, JSON.stringify(index, null, 2));
-}
-
-async function crawlPage(url, robots, depth = 0) {
-  if (visited.has(url) || visited.size >= maxPages) return;
-  if (robots && !robots.isAllowed(url, agent)) return;
+async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
+  if (pageCount.count >= MAX_PAGES || visited.has(url)) return;
+  if (!robots.parser.isAllowed(url, 'fcrawler')) return;
 
   visited.add(url);
-  console.log(`🔍 Crawling: ${url}`);
+  pageCount.count++;
+  console.log(`📄 Crawling: ${url}`);
 
   try {
-    const res = await axios.get(url, { timeout: 8000 });
+    const res = await axios.get(url, { timeout: 10000 });
     const $ = cheerio.load(res.data);
-    const title = $('title').text() || url;
+    const title = $('title').text().trim() || 'untitled';
+    const filename = title.replace(/[^\w]/g, '_').slice(0, 50) + '.html';
+    const filePath = path.join(crawledDir, filename);
+    fs.writeFileSync(filePath, $.html(), 'utf-8');
 
-    // Save HTML content
-    const filename = await saveHtml(url, $.html());
-    await updateSearchIndex({ url, title, filename });
+    const entry = {
+      url,
+      title,
+      filename,
+      text: $('body').text().trim().slice(0, 500)
+    };
 
-    // Extract links
-    const links = new Set();
-    $('a[href]').each((_, el) => {
-      const link = $(el).attr('href');
-      try {
-        const absolute = new URL(link, url).href;
-        if (absolute.startsWith('http')) {
-          links.add(absolute);
-        }
-      } catch {}
-    });
+    let index = [];
+    if (fs.existsSync(indexPath)) {
+      index = JSON.parse(fs.readFileSync(indexPath));
+    }
+    index.push(entry);
+    fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
+
+    const links = $('a[href]')
+      .map((_, el) => $(el).attr('href'))
+      .get()
+      .map(link => new URL(link, url).href)
+      .filter(href => href.startsWith('http'));
 
     for (const link of links) {
-      await crawlPage(link, robots, depth + 1);
+      await sleep(crawlDelay);
+      await crawlPage(link, robots, crawlDelay, pageCount);
     }
   } catch (err) {
-    console.warn(`❌ Failed to crawl ${url}: ${err.message}`);
+    console.warn(`❌ Error crawling ${url}: ${err.message}`);
   }
 }
 
-export async function crawlAndSave(startUrl) {
-  const base = new URL(startUrl).origin;
-  const { robots, crawlDelay } = await getRobotsInfo(base);
-
-  await crawlPage(startUrl, robots);
+export async function crawlSite(startUrl) {
+  if (!fs.existsSync(crawledDir)) fs.mkdirSync(crawledDir);
+  const robots = await getRobotsData(startUrl);
+  await crawlPage(startUrl, robots, robots.delay);
   console.log('✅ Crawl complete. Search index saved.');
 }
