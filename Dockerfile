@@ -1,7 +1,7 @@
 # Use official Node image
 FROM node:20-slim
 
-# Install required system packages for Puppeteer Chromium
+# Install system dependencies required for Chromium (used by Puppeteer)
 RUN apt-get update && apt-get install -y \
     wget \
     ca-certificates \
@@ -19,23 +19,25 @@ RUN apt-get update && apt-get install -y \
     libxcomposite1 \
     libxdamage1 \
     libxrandr2 \
-    libdrm2 \        # <--- 🔥 This fixes the crash!
+    libdrm2 \
     xdg-utils \
-    --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
+    --no-install-recommends && \
+    rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
 
-# Copy and install dependencies
+# Copy package files first for caching
 COPY package*.json ./
+
+# Install dependencies
 RUN npm install
 
-# Copy rest of the files
+# Copy source code
 COPY . .
 
 # Expose app port
 EXPOSE 10000
 
-# Start the server
+# Start the app
 CMD ["npm", "start"]
