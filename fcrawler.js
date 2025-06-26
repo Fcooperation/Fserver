@@ -1,90 +1,67 @@
-import axios from 'axios';
-import * as cheerio from 'cheerio';
 import fs from 'fs';
-import path from 'path';
-import { fileURLToPath } from 'url';
+import axios from 'axios';
+import cheerio from 'cheerio';
 import puppeteer from 'puppeteer';
-import mega from 'megajs';
+import pkg from 'megajs';
+import robotsParser from 'robots-parser';
+import { URL } from 'url';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+const { Storage } = pkg;
 
-// Your MEGA credentials
-const email = process.env.META_EMAIL;
-const password = process.env.META_PASSWORD;
-
-const storage = mega({ email, password }, () => {
-  console.log('🔐 Logged into MEGA.');
-  startCrawling();
+// ✅ HARD-CODED MEGA CREDENTIALS
+const storage = new Storage({
+  email: 'thefcooperation@gmail.com',
+  password: 'YOUR_MEGA_PASSWORD_HERE'  // <-- replace with actual password
 });
 
-async function fetchWithPuppeteer(url) {
-  const browser = await puppeteer.launch({ headless: 'new' });
-  const page = await browser.newPage();
-  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
-  const html = await page.content();
-  await browser.close();
-  return html;
-}
+await storage.ready;
 
-async function uploadToMega(filename, content) {
-  return new Promise((resolve, reject) => {
-    const file = storage.file(filename);
-    const writeStream = file.upload();
-    writeStream.end(content);
-    writeStream.on('complete', () => {
-      console.log(`📤 Uploaded: ${filename}`);
-      resolve();
-    });
-    writeStream.on('error', reject);
-  });
-}
+const START_URL = 'https://example.com';
+const ALLOWED_DOMAINS = ['example.com'];
 
-function sanitizeFilename(str) {
-  return str.replace(/[<>:"/\\|?*]+/g, '_').replace(/\s+/g, '_');
-}
+async function crawl(url, visited = new Set()) {
+  if (visited.has(url)) return;
+  visited.add(url);
 
-async function fileExistsOnMega(filename) {
-  return new Promise((resolve) => {
-    storage.load(() => {
-      const exists = storage.children.some(file => file.name === filename);
-      resolve(exists);
-    });
-  });
-}
+  const domain = new URL(url).hostname;
+  if (!ALLOWED_DOMAINS.includes(domain)) return;
 
-async function crawlPage(url) {
   try {
-    console.log(`📄 Crawling: ${url}`);
-    const html = await fetchWithPuppeteer(url);
+    const robotsUrl = new URL('/robots.txt', url).href;
+    const robotsRes = await axios.get(robotsUrl).catch(() => ({ data: '' }));
+    const robots = robotsParser(robotsUrl, robotsRes.data);
+    if (!robots.isAllowed(url)) return;
+
+    const browser = await puppeteer.launch({
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+
+    const page = await browser.newPage();
+    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
+    const html = await page.content();
+    const title = await page.title();
+    const filename = `${title.replace(/[^\w]/g, '_')}.html`;
+
+    fs.writeFileSync(filename, html);
+
+    const file = await storage.upload({ name: filename, size: fs.statSync(filename).size }, fs.createReadStream(filename));
+    console.log(`✅ Uploaded: ${file.name}`);
+
     const $ = cheerio.load(html);
+    const links = $('a[href]').map((i, el) => $(el).attr('href')).get();
 
-    const title = $('title').text().trim() || 'Untitled';
-    const filename = sanitizeFilename(title) + '.html';
+    await browser.close();
 
-    if (await fileExistsOnMega(filename)) {
-      console.log(`⏩ Skipped (already exists): ${filename}`);
-      return;
+    for (const link of links) {
+      try {
+        const nextUrl = new URL(link, url).href;
+        await crawl(nextUrl, visited);
+      } catch {}
     }
-
-    const structuredContent = $('body').html();
-    await uploadToMega(filename, structuredContent);
   } catch (err) {
-    console.error(`❌ Error crawling ${url}:`, err.message);
+    console.error(`❌ Error at ${url}:`, err.message);
   }
 }
 
-function startCrawling() {
-  const urls = [
-    'https://example.com',
-    'https://www.iana.org/',
-    'https://www.iana.org/domains',
-    'https://www.iana.org/about'
-  ];
-
-  (async () => {
-    for (const url of urls) {
-      await crawlPage(url);
-    }
-  })();
-}
+crawl(START_URL);
