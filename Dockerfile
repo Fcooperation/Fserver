@@ -1,7 +1,7 @@
-# Use official Node image
+# Use official Node.js image with Debian slim
 FROM node:20-slim
 
-# Install required system packages
+# Install necessary system dependencies for Chromium (required by Puppeteer)
 RUN apt-get update && apt-get install -y \
     wget \
     ca-certificates \
@@ -20,23 +20,24 @@ RUN apt-get update && apt-get install -y \
     libxdamage1 \
     libxrandr2 \
     xdg-utils \
-    --no-install-recommends \
-    && rm -rf /var/lib/apt/lists/*
+    --no-install-recommends && \
+    apt-get clean && \
+    rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
 
-# Copy package files
+# Copy package definition files first (for caching)
 COPY package*.json ./
 
-# Install dependencies (important!)
+# Install Node.js dependencies
 RUN npm install
 
-# Copy the rest of the files
+# Copy the full app source code
 COPY . .
 
-# Expose your app port
+# Expose the web server port (adjust if needed)
 EXPOSE 10000
 
-# Start your server
+# Default command to run app
 CMD ["npm", "start"]
