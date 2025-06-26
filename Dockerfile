@@ -1,7 +1,7 @@
-# Use official Node.js image with Debian slim
+# Use official Node image
 FROM node:20-slim
 
-# Install necessary system dependencies for Chromium (required by Puppeteer)
+# Install required system packages for Puppeteer Chromium
 RUN apt-get update && apt-get install -y \
     wget \
     ca-certificates \
@@ -19,25 +19,23 @@ RUN apt-get update && apt-get install -y \
     libxcomposite1 \
     libxdamage1 \
     libxrandr2 \
+    libdrm2 \        # <--- 🔥 This fixes the crash!
     xdg-utils \
-    --no-install-recommends && \
-    apt-get clean && \
-    rm -rf /var/lib/apt/lists/*
+    --no-install-recommends \
+    && rm -rf /var/lib/apt/lists/*
 
 # Set working directory
 WORKDIR /app
 
-# Copy package definition files first (for caching)
+# Copy and install dependencies
 COPY package*.json ./
-
-# Install Node.js dependencies
 RUN npm install
 
-# Copy the full app source code
+# Copy rest of the files
 COPY . .
 
-# Expose the web server port (adjust if needed)
+# Expose app port
 EXPOSE 10000
 
-# Default command to run app
+# Start the server
 CMD ["npm", "start"]
