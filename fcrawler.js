@@ -1,69 +1,58 @@
 import puppeteer from 'puppeteer';
 import fs from 'fs/promises';
 import path from 'path';
-import mega from 'megajs';
+import { fileURLToPath } from 'url';
+import { createRequire } from 'module';
+const require = createRequire(import.meta.url);
+const mega = require('megajs');
 
-const META_EMAIL = 'thefcooperation@gmail.com';
-const META_PASSWORD = 'your_password_here'; // hardcoded as requested
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-function loginToMega() {
-  return new Promise((resolve, reject) => {
-    const storage = mega({ email: META_EMAIL, password: META_PASSWORD });
-    storage.on('ready', () => resolve(storage));
-    storage.on('error', reject);
-  });
-}
+// Hardcoded credentials
+const email = 'thefcooperation@gmail.com';
+const password = '*Onyedika2009*'; // 🔒 Replace this with real MEGA password
 
-async function crawlPage(url) {
+export async function crawlSite(startUrl) {
   const browser = await puppeteer.launch({
     headless: 'new',
     args: ['--no-sandbox', '--disable-setuid-sandbox']
   });
+
   const page = await browser.newPage();
-  await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+  await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
 
-  const title = await page.title();
   const html = await page.content();
-
-  await browser.close();
-  return { html, title };
-}
-
-function extractContent(html, url) {
-  return {
-    html,
-    title: `Snapshot of ${url}`
-  };
-}
-
-async function saveHTML(html, filename) {
-  const fullPath = path.join('/tmp', filename);
+  const title = await page.title();
+  const safeTitle = title.replace(/[^\w\s]/gi, '').replace(/\s+/g, '_');
+  const filename = `${safeTitle}.html`;
+  const fullPath = path.join(__dirname, filename);
   await fs.writeFile(fullPath, html);
-  return fullPath;
+  console.log(`Saved: ${filename}`);
+
+  await uploadToMega(fullPath, filename);
+  await browser.close();
 }
 
-async function uploadToMega(storage, filePath, filename) {
-  const up = storage.upload({ name: filename });
-  const data = await fs.readFile(filePath);
-  up.end(data);
-  return new Promise((resolve, reject) => {
-    up.on('complete', resolve);
-    up.on('error', reject);
+async function uploadToMega(localPath, filename) {
+  const stream = require('fs').createReadStream(localPath);
+
+  const storage = mega({ email, password });
+  await new Promise((resolve, reject) => {
+    storage.login(err => {
+      if (err) return reject(err);
+      resolve();
+    });
   });
-}
 
-export async function crawlSite() {
-  const startUrl = 'https://www.google.com/search?q=site:gov.uk+climate';
+  const upload = storage.upload(filename);
+  stream.pipe(upload);
 
-  const storage = await loginToMega();
-  const { title, html } = await crawlPage(startUrl);
-  const { html: finalHtml } = extractContent(html, startUrl);
+  upload.on('complete', file => {
+    console.log('Uploaded to MEGA:', file.name);
+  });
 
-  const safeName = title.replace(/[^a-z0-9]/gi, '_').toLowerCase().slice(0, 60);
-  const filename = `${safeName || 'page'}.html`;
-  const filePath = await saveHTML(finalHtml, filename);
-
-  console.log(`✅ Saved ${filename}, uploading to MEGA...`);
-  await uploadToMega(storage, filePath, filename);
-  console.log('🚀 Upload complete!');
+  upload.on('error', err => {
+    console.error('Upload failed:', err);
+  });
 }
