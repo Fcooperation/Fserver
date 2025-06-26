@@ -5,12 +5,21 @@ import * as cheerio from 'cheerio';
 import robotsParser from 'robots-parser';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
+import mega from 'megajs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const crawledDir = path.join(__dirname, 'crawled');
 const indexPath = path.join(crawledDir, 'search_index.json');
 const visited = new Set();
 const MAX_PAGES = 10;
+
+// MEGA Login (HARD-CODED)
+const storage = mega({
+  email: 'thefcooperation@gmail.com',
+  password: '*Onyedika2009*',
+  autoload: true,
+  keepalive: false
+});
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -30,6 +39,17 @@ async function getRobotsData(url) {
   }
 }
 
+async function uploadToMega(filePath, filename) {
+  return new Promise((resolve, reject) => {
+    const upload = storage.upload(filename, fs.readFileSync(filePath));
+    upload.on('complete', file => {
+      console.log(`📤 Uploaded to MEGA: ${file.name}`);
+      resolve();
+    });
+    upload.on('error', reject);
+  });
+}
+
 async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
   if (pageCount.count >= MAX_PAGES || visited.has(url)) return;
   if (!robots.parser.isAllowed(url, 'fcrawler')) return;
@@ -41,10 +61,21 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
   try {
     const res = await axios.get(url, { timeout: 10000 });
     const $ = cheerio.load(res.data);
+
     const title = $('title').text().trim() || 'untitled';
     const filename = title.replace(/[^\w]/g, '_').slice(0, 50) + '.html';
     const filePath = path.join(crawledDir, filename);
-    fs.writeFileSync(filePath, $.html(), 'utf-8');
+
+    // Rebuild page to preserve visual layout (basic reformation)
+    const rebuiltHtml = `
+      <!DOCTYPE html>
+      <html>
+      <head><meta charset="utf-8"><title>${title}</title></head>
+      <body>${$('body').html()}</body>
+      </html>
+    `.trim();
+
+    fs.writeFileSync(filePath, rebuiltHtml, 'utf-8');
 
     const entry = {
       url,
@@ -59,6 +90,9 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
     }
     index.push(entry);
     fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
+
+    // Upload to MEGA
+    await uploadToMega(filePath, filename);
 
     const links = $('a[href]')
       .map((_, el) => $(el).attr('href'))
