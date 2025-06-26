@@ -1,7 +1,7 @@
 {
   "name": "fserver",
   "version": "1.0.0",
-  "description": "Fserver crawler that extracts block HTML content and uploads to MEGA.",
+  "description": "Fserver crawler with Puppeteer and MEGA upload",
   "main": "index.js",
   "type": "module",
   "scripts": {
@@ -12,12 +12,13 @@
     "cheerio": "^1.0.0-rc.12",
     "express": "^4.19.2",
     "megajs": "^1.0.6",
-    "puppeteer": "^21.6.1",
-    "robots-parser": "^2.1.1"
+    "puppeteer-core": "^21.6.1",
+    "robots-parser": "^3.1.1"
   },
   "keywords": [
     "crawler",
     "fserver",
+    "puppeteer",
     "mega",
     "search"
   ],
