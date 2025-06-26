@@ -10,7 +10,7 @@
   "dependencies": {
     "axios": "^1.6.0",
     "cheerio": "^1.0.0-rc.12",
-    "robots-parser": "^3.2.0"
+    "robots-parser": "^2.1.1"
   },
   "keywords": ["crawler", "robots.txt", "axios", "cheerio", "fcrawler"],
   "author": "Francis (F_cooperation)",
