@@ -1,5 +1,5 @@
 {
-  "name": "fserver",
+  "name": "fserver-crawler",
   "version": "1.0.0",
   "type": "module",
   "main": "index.js",
@@ -9,7 +9,7 @@
   "dependencies": {
     "axios": "^1.6.8",
     "cheerio": "^1.0.0-rc.12",
-    "express": "^4.19.2",
-    "robots-parser": "^2.1.2"
+    "megajs": "^1.0.7",
+    "robots-parser": "^2.1.1"
   }
 }
