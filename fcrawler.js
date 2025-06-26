@@ -1,22 +1,22 @@
-import puppeteer from 'puppeteer';
-import cheerio from 'cheerio';
 import axios from 'axios';
+import cheerio from 'cheerio';
+import puppeteer from 'puppeteer';
 import robotsParser from 'robots-parser';
 import { Storage } from 'megajs';
-import fs from 'fs';
+import fs from 'fs/promises';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
-// Setup for __dirname in ES modules
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-// MEGA credentials (hardcoded)
 const megaEmail = 'thefcooperation@gmail.com';
-const megaPassword = '*Onyedika2009*';
+const megaPassword = '*Onyedika2009*'; // Hardcoded as requested
 
-// Login to MEGA
-async function loginToMega() {
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const UPLOAD_DIR = path.join(__dirname, 'uploads');
+
+const startUrl = 'https://example.com/';
+const visited = new Set();
+
+async function initMega() {
   return new Promise((resolve, reject) => {
     const storage = new Storage({ email: megaEmail, password: megaPassword });
     storage.on('ready', () => resolve(storage));
@@ -25,88 +25,72 @@ async function loginToMega() {
   });
 }
 
-// Check if file already exists
-function fileExistsInMega(storage, fileName) {
+async function pageExistsInMega(storage, fileName) {
   return storage.root.children.some(file => file.name === fileName);
 }
 
-// Get HTML with Puppeteer
-async function fetchHTMLWithPuppeteer(url) {
-  const browser = await puppeteer.launch({ headless: 'new' });
-  const page = await browser.newPage();
-  await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-  const html = await page.content();
-  await browser.close();
-  return html;
+function sanitizeFileName(title) {
+  return title.replace(/[^a-z0-9]/gi, '_').substring(0, 100) + '.html';
 }
 
-// Save HTML locally
-function saveLocally(fileName, content) {
-  const outPath = path.join(__dirname, 'downloads', fileName);
-  fs.mkdirSync(path.dirname(outPath), { recursive: true });
-  fs.writeFileSync(outPath, content);
-  return outPath;
-}
-
-// Upload to MEGA
-function uploadToMega(storage, filePath, fileName) {
-  return new Promise((resolve, reject) => {
-    const fileStream = fs.createReadStream(filePath);
-    const upload = storage.upload(fileName, fileStream);
-    upload.on('complete', () => resolve(fileName));
-    upload.on('error', reject);
-  });
-}
-
-// Reformat page: preserve layout using cheerio block wrapping
-function reformatPage(html, url) {
-  const $ = cheerio.load(html);
-  $('script, style, iframe, video').remove(); // Clean junk
-  const title = $('title').text() || 'Untitled';
-  const bodyContent = $('body').html() || '';
-  return `
-    <html>
-      <head><meta charset="utf-8"><title>${title}</title></head>
-      <body>${bodyContent}</body>
-    </html>
-  `;
-}
-
-// Crawl a URL
 async function crawlPage(url, storage) {
-  try {
-    const html = await fetchHTMLWithPuppeteer(url);
-    const formattedHTML = reformatPage(html, url);
-    const fileName = url.replace(/[^a-zA-Z0-9]/g, '_') + '.html';
+  if (visited.has(url)) return;
+  visited.add(url);
 
-    if (fileExistsInMega(storage, fileName)) {
+  try {
+    const robotsUrl = new URL('/robots.txt', url).href;
+    const { data: robotsTxt } = await axios.get(robotsUrl).catch(() => ({ data: '' }));
+    const robots = robotsParser(robotsUrl, robotsTxt);
+    if (!robots.isAllowed(url, '*')) return;
+
+    const browser = await puppeteer.launch({
+      headless: 'new',
+      args: ['--no-sandbox', '--disable-setuid-sandbox']
+    });
+
+    const page = await browser.newPage();
+    await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 20000 });
+
+    const html = await page.content();
+    const $ = cheerio.load(html);
+    const title = $('title').text().trim() || 'Untitled';
+    const fileName = sanitizeFileName(title);
+
+    if (await pageExistsInMega(storage, fileName)) {
       console.log(`⏩ Skipped (already exists): ${fileName}`);
+      await browser.close();
       return;
     }
 
-    const filePath = saveLocally(fileName, formattedHTML);
-    await uploadToMega(storage, filePath, fileName);
-    console.log(`📤 Uploaded: ${fileName}`);
+    await fs.mkdir(UPLOAD_DIR, { recursive: true });
+    const filePath = path.join(UPLOAD_DIR, fileName);
+    await fs.writeFile(filePath, html);
+    const fileStream = await fs.readFile(filePath);
+
+    storage.root.upload(fileName, fileStream).on('complete', () => {
+      console.log(`📤 Uploaded: ${fileName}`);
+    });
+
+    await browser.close();
+
+    // Crawl more links (limited depth here to avoid infinite loop)
+    const links = $('a[href]')
+      .map((_, el) => new URL($(el).attr('href'), url).href)
+      .get()
+      .filter(link => link.startsWith('http') && !visited.has(link));
+
+    for (const link of links.slice(0, 3)) {
+      await crawlPage(link, storage);
+    }
+
   } catch (err) {
     console.error(`❌ Error crawling ${url}:`, err.message);
   }
 }
 
-// Entry point
-export async function runCrawler() {
-  const seedUrls = [
-    'https://example.com/',
-    'https://www.iana.org/domains/example',
-    'https://www.iana.org/',
-    'https://www.iana.org/about'
-  ];
+const start = async () => {
+  const storage = await initMega();
+  await crawlPage(startUrl, storage);
+};
 
-  const storage = await loginToMega();
-
-  for (const url of seedUrls) {
-    await crawlPage(url, storage);
-  }
-
-  storage.close();
-  console.log('✅ Crawl complete.');
-}
+start();
