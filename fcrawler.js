@@ -1,7 +1,8 @@
 import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
-import * as cheerio from 'cheerio';
+import puppeteer from 'puppeteer';
+import cheerio from 'cheerio';
 import robotsParser from 'robots-parser';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
@@ -13,11 +14,9 @@ const indexPath = path.join(crawledDir, 'search_index.json');
 const visited = new Set();
 const MAX_PAGES = 10;
 
-// Mega login
 const megaEmail = 'thefcooperation@gmail.com';
 const megaPassword = '*Onyedika2009*';
 
-// Delay between requests
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
@@ -36,42 +35,23 @@ async function getRobotsData(url) {
   }
 }
 
-// Upload if not already on MEGA
-async function uploadToMegaIfNotExists(filename, filePath) {
+async function connectMega() {
   return new Promise((resolve, reject) => {
-    const storage = new Storage({ email: megaEmail, password: megaPassword });
-
-    storage.on('ready', async () => {
-      const files = Object.values(storage.files);
-      const exists = files.some(file => file.name === filename);
-
-      if (exists) {
-        console.log(`⏩ Skipped (already exists): ${filename}`);
-        return resolve();
-      }
-
-      const upload = storage.upload(filename, fs.createReadStream(filePath));
-      upload.on('complete', () => {
-        console.log(`📤 Uploaded: ${filename}`);
-        resolve();
-      });
-
-      upload.on('error', err => {
-        console.error(`❌ Upload error: ${err.message}`);
-        reject(err);
-      });
+    const storage = new Storage({
+      email: megaEmail,
+      password: megaPassword
     });
-
-    storage.on('error', err => {
-      console.error(`❌ MEGA login failed: ${err.message}`);
-      reject(err);
-    });
-
+    storage.on('ready', () => resolve(storage));
+    storage.on('error', err => reject(err));
     storage.login();
   });
 }
 
-async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
+async function fileExistsOnMega(storage, filename) {
+  return storage.files.some(file => file.name === filename);
+}
+
+async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }, storage, browser) {
   if (pageCount.count >= MAX_PAGES || visited.has(url)) return;
   if (!robots.parser.isAllowed(url, 'fcrawler')) return;
 
@@ -80,16 +60,26 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
   console.log(`📄 Crawling: ${url}`);
 
   try {
-    const res = await axios.get(url, { timeout: 10000 });
-    const $ = cheerio.load(res.data, { decodeEntities: false });
+    const page = await browser.newPage();
+    await page.goto(url, { timeout: 15000, waitUntil: 'networkidle2' });
+    const html = await page.content();
+    const $ = cheerio.load(html);
 
     const title = $('title').text().trim() || 'untitled';
     const filename = title.replace(/[^\w]/g, '_').slice(0, 50) + '.html';
     const filePath = path.join(crawledDir, filename);
 
-    // Ensure HTML block structure preserved
-    const htmlContent = `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="UTF-8">\n<title>${title}</title>\n</head>\n<body>\n${$('body').html()}\n</body>\n</html>`;
-    fs.writeFileSync(filePath, htmlContent, 'utf-8');
+    if (await fileExistsOnMega(storage, filename)) {
+      console.log(`⏩ Skipped (already exists): ${filename}`);
+      await page.close();
+      return;
+    }
+
+    fs.writeFileSync(filePath, html, 'utf-8');
+
+    const screenshotPath = path.join(crawledDir, filename.replace('.html', '.png'));
+    await page.screenshot({ path: screenshotPath, fullPage: true });
+    await page.close();
 
     const entry = {
       url,
@@ -105,8 +95,23 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
     index.push(entry);
     fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
 
-    await uploadToMegaIfNotExists(filename, filePath);
+    // Upload HTML
+    const htmlStream = fs.createReadStream(filePath);
+    const htmlUpload = storage.upload(filename, html.length);
+    htmlStream.pipe(htmlUpload);
+    htmlUpload.complete.then(() => {
+      console.log(`📤 Uploaded: ${filename}`);
+    });
 
+    // Upload Screenshot
+    const ssStream = fs.createReadStream(screenshotPath);
+    const ssUpload = storage.upload(filename.replace('.html', '.png'), fs.statSync(screenshotPath).size);
+    ssStream.pipe(ssUpload);
+    ssUpload.complete.then(() => {
+      console.log(`🖼️ Uploaded screenshot: ${filename.replace('.html', '.png')}`);
+    });
+
+    // Crawl next links
     const links = $('a[href]')
       .map((_, el) => $(el).attr('href'))
       .get()
@@ -115,8 +120,9 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
 
     for (const link of links) {
       await sleep(crawlDelay);
-      await crawlPage(link, robots, crawlDelay, pageCount);
+      await crawlPage(link, robots, crawlDelay, pageCount, storage, browser);
     }
+
   } catch (err) {
     console.warn(`❌ Error crawling ${url}: ${err.message}`);
   }
@@ -125,6 +131,9 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
 export async function crawlSite(startUrl) {
   if (!fs.existsSync(crawledDir)) fs.mkdirSync(crawledDir);
   const robots = await getRobotsData(startUrl);
-  await crawlPage(startUrl, robots, robots.delay);
+  const storage = await connectMega();
+  const browser = await puppeteer.launch({ headless: 'new', args: ['--no-sandbox'] });
+  await crawlPage(startUrl, robots, robots.delay, { count: 0 }, storage, browser);
+  await browser.close();
   console.log('✅ Crawl complete. Search index saved.');
 }
