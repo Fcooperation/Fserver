@@ -1,67 +1,100 @@
-import fs from 'fs';
-import axios from 'axios';
-import cheerio from 'cheerio';
 import puppeteer from 'puppeteer';
-import pkg from 'megajs';
-import robotsParser from 'robots-parser';
-import { URL } from 'url';
+import fs from 'fs/promises';
+import path from 'path';
+import { Storage } from 'megajs';
+import * as cheerio from 'cheerio';
+import { fileURLToPath } from 'url';
 
-const { Storage } = pkg;
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
-// ✅ HARD-CODED MEGA CREDENTIALS
-const storage = new Storage({
-  email: 'thefcooperation@gmail.com',
-  password: 'YOUR_MEGA_PASSWORD_HERE'  // <-- replace with actual password
-});
+// Hardcoded MEGA credentials (you said it's fine)
+const megaEmail = 'thefcooperation@gmail.com';
+const megaPassword = 'YOUR_PASSWORD_HERE'; // 🔐 Replace with real password
 
-await storage.ready;
-
-const START_URL = 'https://example.com';
-const ALLOWED_DOMAINS = ['example.com'];
-
-async function crawl(url, visited = new Set()) {
-  if (visited.has(url)) return;
-  visited.add(url);
-
-  const domain = new URL(url).hostname;
-  if (!ALLOWED_DOMAINS.includes(domain)) return;
-
-  try {
-    const robotsUrl = new URL('/robots.txt', url).href;
-    const robotsRes = await axios.get(robotsUrl).catch(() => ({ data: '' }));
-    const robots = robotsParser(robotsUrl, robotsRes.data);
-    if (!robots.isAllowed(url)) return;
-
-    const browser = await puppeteer.launch({
-      headless: 'new',
-      args: ['--no-sandbox', '--disable-setuid-sandbox']
+// Set up MEGA session
+async function loginToMega() {
+  return new Promise((resolve, reject) => {
+    const storage = new Storage({
+      email: megaEmail,
+      password: megaPassword,
+      autoload: true
     });
 
-    const page = await browser.newPage();
-    await page.goto(url, { waitUntil: 'networkidle2', timeout: 30000 });
-    const html = await page.content();
-    const title = await page.title();
-    const filename = `${title.replace(/[^\w]/g, '_')}.html`;
-
-    fs.writeFileSync(filename, html);
-
-    const file = await storage.upload({ name: filename, size: fs.statSync(filename).size }, fs.createReadStream(filename));
-    console.log(`✅ Uploaded: ${file.name}`);
-
-    const $ = cheerio.load(html);
-    const links = $('a[href]').map((i, el) => $(el).attr('href')).get();
-
-    await browser.close();
-
-    for (const link of links) {
-      try {
-        const nextUrl = new URL(link, url).href;
-        await crawl(nextUrl, visited);
-      } catch {}
-    }
-  } catch (err) {
-    console.error(`❌ Error at ${url}:`, err.message);
-  }
+    storage.on('ready', () => resolve(storage));
+    storage.on('error', reject);
+  });
 }
 
-crawl(START_URL);
+// Crawl with Puppeteer
+async function crawlPage(url) {
+  const browser = await puppeteer.launch({
+    headless: true,
+    args: ['--no-sandbox', '--disable-setuid-sandbox']
+  });
+
+  const page = await browser.newPage();
+  await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
+
+  const html = await page.content();
+  await browser.close();
+  return html;
+}
+
+// Extract title, text, and images
+function extractContent(html, url) {
+  const $ = cheerio.load(html);
+  const title = $('title').text() || 'untitled';
+  const blocks = [];
+
+  $('body').children().each((_, el) => {
+    const tag = el.tagName?.toLowerCase();
+    const outer = $.html(el).trim();
+    if (outer) blocks.push(outer);
+  });
+
+  const fullContent = `
+    <html><head><meta charset="utf-8"><title>${title}</title></head>
+    <body>${blocks.join('\n')}</body></html>
+  `;
+
+  return { title, html: fullContent, url };
+}
+
+// Save file locally
+async function saveHTML(content, filename) {
+  const filePath = path.join(__dirname, filename);
+  await fs.writeFile(filePath, content, 'utf-8');
+  return filePath;
+}
+
+// Upload to MEGA
+async function uploadToMega(storage, filePath, fileName) {
+  const fileData = await fs.readFile(filePath);
+  const file = storage.root.upload(fileName, fileData.length, err => {
+    if (err) console.error('Upload error:', err);
+  });
+
+  file.write(fileData);
+  file.end();
+}
+
+// MAIN FLOW
+(async () => {
+  const startUrl = 'https://www.google.com/search?q=site:gov.uk+climate'; // Example query
+
+  try {
+    const storage = await loginToMega();
+    const html = await crawlPage(startUrl);
+    const { title, html: pageContent } = extractContent(html, startUrl);
+
+    const safeName = title.replace(/[^a-z0-9]/gi, '_').toLowerCase().slice(0, 60);
+    const filename = `${safeName || 'page'}.html`;
+    const filePath = await saveHTML(pageContent, filename);
+
+    console.log(`✅ Saved ${filename}, now uploading to MEGA...`);
+    await uploadToMega(storage, filePath, filename);
+    console.log('🚀 Upload complete!');
+  } catch (err) {
+    console.error('❌ Error:', err);
+  }
+})();
