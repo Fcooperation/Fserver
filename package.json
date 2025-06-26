@@ -13,7 +13,7 @@
     "express": "^4.19.2",
     "megajs": "^1.0.6",
     "puppeteer": "^21.6.1",
-    "robots-parser": "^3.2.0"
+    "robots-parser": "^2.1.1"
   },
   "keywords": [
     "crawler",
