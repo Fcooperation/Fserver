@@ -1,106 +1,90 @@
 import axios from 'axios';
-import cheerio from 'cheerio';
-import robotsParser from 'robots-parser';
-import puppeteer from 'puppeteer-core';
-import { URL } from 'url';
-import fs from 'fs/promises';
-import { storage } from 'megajs';
+import * as cheerio from 'cheerio';
+import fs from 'fs';
+import path from 'path';
+import { fileURLToPath } from 'url';
+import puppeteer from 'puppeteer';
+import mega from 'megajs';
 
-const MEGA_EMAIL = 'thefcooperation@gmail.com';
-const MEGA_PASSWORD = '*Onyedika2009*';
-const executablePath = process.env.PUPPETEER_EXECUTABLE_PATH || '/usr/bin/chromium';
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-// Login to MEGA
-async function connectToMega() {
-  return new Promise((resolve, reject) => {
-    const mega = storage({ email: MEGA_EMAIL, password: MEGA_PASSWORD }, err => {
-      if (err) reject(err);
-      else resolve(mega);
-    });
-  });
-}
+// Your MEGA credentials
+const email = process.env.META_EMAIL;
+const password = process.env.META_PASSWORD;
 
-// Check if a file already exists on MEGA
-async function fileExists(mega, name) {
-  return new Promise(resolve => {
-    let found = false;
-    mega.root.children.forEach(file => {
-      if (file.name === name) found = true;
-    });
-    resolve(found);
-  });
-}
+const storage = mega({ email, password }, () => {
+  console.log('🔐 Logged into MEGA.');
+  startCrawling();
+});
 
-// Download and save screenshot with Puppeteer
-async function captureScreenshot(url, filename) {
-  const browser = await puppeteer.launch({
-    headless: 'new',
-    executablePath,
-    args: ['--no-sandbox', '--disable-setuid-sandbox']
-  });
-
+async function fetchWithPuppeteer(url) {
+  const browser = await puppeteer.launch({ headless: 'new' });
   const page = await browser.newPage();
-  await page.goto(url, { waitUntil: 'networkidle2', timeout: 60000 });
-  await page.setViewport({ width: 1280, height: 800 });
-
-  const screenshotPath = `/tmp/${filename}.png`;
-  await page.screenshot({ path: screenshotPath, fullPage: true });
-
+  await page.goto(url, { waitUntil: 'domcontentloaded', timeout: 30000 });
+  const html = await page.content();
   await browser.close();
-  return screenshotPath;
+  return html;
 }
 
-// Crawl a single page
-async function crawlPage(url, mega) {
-  try {
-    const { data } = await axios.get(url, { timeout: 10000 });
-    const $ = cheerio.load(data);
-    const title = $('title').text().trim() || 'Untitled';
-    const blocks = [];
-
-    $('body').children().each((i, el) => {
-      blocks.push($.html(el));
+async function uploadToMega(filename, content) {
+  return new Promise((resolve, reject) => {
+    const file = storage.file(filename);
+    const writeStream = file.upload();
+    writeStream.end(content);
+    writeStream.on('complete', () => {
+      console.log(`📤 Uploaded: ${filename}`);
+      resolve();
     });
+    writeStream.on('error', reject);
+  });
+}
 
-    const safeTitle = title.replace(/[^a-z0-9]/gi, '_').slice(0, 50);
-    const filename = `${safeTitle}.html`;
+function sanitizeFilename(str) {
+  return str.replace(/[<>:"/\\|?*]+/g, '_').replace(/\s+/g, '_');
+}
 
-    const exists = await fileExists(mega, filename);
-    if (exists) {
+async function fileExistsOnMega(filename) {
+  return new Promise((resolve) => {
+    storage.load(() => {
+      const exists = storage.children.some(file => file.name === filename);
+      resolve(exists);
+    });
+  });
+}
+
+async function crawlPage(url) {
+  try {
+    console.log(`📄 Crawling: ${url}`);
+    const html = await fetchWithPuppeteer(url);
+    const $ = cheerio.load(html);
+
+    const title = $('title').text().trim() || 'Untitled';
+    const filename = sanitizeFilename(title) + '.html';
+
+    if (await fileExistsOnMega(filename)) {
       console.log(`⏩ Skipped (already exists): ${filename}`);
       return;
     }
 
-    const htmlContent = `
-      <!DOCTYPE html>
-      <html>
-        <head><meta charset="UTF-8"><title>${title}</title></head>
-        <body>${blocks.join('\n')}</body>
-      </html>`;
-
-    const htmlPath = `/tmp/${filename}`;
-    await fs.writeFile(htmlPath, htmlContent);
-
-    // Upload .html file
-    const upload1 = mega.root.upload(htmlPath, filename);
-    upload1.complete = () => console.log(`📤 Uploaded: ${filename}`);
-
-    // Screenshot
-    const thumbPath = await captureScreenshot(url, safeTitle);
-    const upload2 = mega.root.upload(thumbPath, `${safeTitle}_thumb.png`);
-    upload2.complete = () => console.log(`🖼️ Uploaded thumbnail: ${safeTitle}_thumb.png`);
+    const structuredContent = $('body').html();
+    await uploadToMega(filename, structuredContent);
   } catch (err) {
-    console.error(`❌ Error crawling ${url}: ${err.message}`);
+    console.error(`❌ Error crawling ${url}:`, err.message);
   }
 }
 
-// Example use
-const START_URLS = [
-  'https://example.com',
-  'https://www.iana.org/domains/example'
-];
+function startCrawling() {
+  const urls = [
+    'https://example.com',
+    'https://www.iana.org/',
+    'https://www.iana.org/domains',
+    'https://www.iana.org/about'
+  ];
 
-const mega = await connectToMega();
-for (const url of START_URLS) {
-  await crawlPage(url, mega);
+  (async () => {
+    for (const url of urls) {
+      await crawlPage(url);
+    }
+  })();
 }
