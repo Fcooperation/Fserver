@@ -2,10 +2,10 @@ import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
+import { Storage } from 'megajs';
 import robotsParser from 'robots-parser';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import mega from 'megajs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const crawledDir = path.join(__dirname, 'crawled');
@@ -13,7 +13,6 @@ const indexPath = path.join(crawledDir, 'search_index.json');
 const visited = new Set();
 const MAX_PAGES = 10;
 
-// === HARD-CODED MEGA CREDENTIALS ===
 const MEGA_EMAIL = 'thefcooperation@gmail.com';
 const MEGA_PASSWORD = '*Onyedika2009*';
 
@@ -35,41 +34,42 @@ async function getRobotsData(url) {
   }
 }
 
-function cleanFileName(name) {
-  return name.replace(/[^\w]/g, '_').slice(0, 50) + '.html';
+function formatHtml($) {
+  const body = $('body');
+  const blocks = [];
+  body.children().each((_, el) => {
+    const tag = $(el).get(0).tagName;
+    const content = $.html(el);
+    if (tag && content) blocks.push(content);
+  });
+
+  return `
+    <!DOCTYPE html>
+    <html>
+      <head><meta charset="UTF-8"><title>${$('title').text()}</title></head>
+      <body>${blocks.join('\n')}</body>
+    </html>
+  `;
 }
 
-function rebuildStructuredHtml($) {
-  const blocks = $('body')
-    .find('p, div, section, article, img, ul, ol, pre, code')
-    .map((_, el) => $.html(el))
-    .get();
-
-  return `<!DOCTYPE html>
-<html><head><meta charset="utf-8"><title>${$('title').text()}</title></head><body>
-${blocks.join('\n')}
-</body></html>`;
-}
-
-async function uploadToMega(filename, localPath) {
+function uploadToMega(filename, contentBuffer) {
   return new Promise((resolve, reject) => {
-    const storage = mega({ email: MEGA_EMAIL, password: MEGA_PASSWORD });
+    const storage = new Storage({
+      email: MEGA_EMAIL,
+      password: MEGA_PASSWORD
+    });
 
-    storage.once('ready', () => {
-      const fileStream = fs.createReadStream(localPath);
-      const upload = storage.upload(filename);
-
-      fileStream.pipe(upload);
-
-      upload.on('complete', () => {
-        console.log(`☁️ Uploaded to MEGA: ${filename}`);
+    storage.on('ready', () => {
+      const file = storage.root.upload(filename, contentBuffer);
+      file.on('complete', () => {
+        console.log(`📤 Uploaded: ${filename}`);
         resolve();
       });
-
-      upload.on('error', reject);
+      file.on('error', reject);
     });
 
     storage.on('error', reject);
+    storage.login();
   });
 }
 
@@ -83,12 +83,15 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
 
   try {
     const res = await axios.get(url, { timeout: 10000 });
-    const $ = cheerio.load(res.data);
+    const $ = cheerio.load(res.data, { decodeEntities: false });
+
     const title = $('title').text().trim() || 'untitled';
-    const filename = cleanFileName(title);
+    const filename = title.replace(/[^\w]/g, '_').slice(0, 50) + '.html';
     const filePath = path.join(crawledDir, filename);
-    const rebuiltHtml = rebuildStructuredHtml($);
+    const rebuiltHtml = formatHtml($);
+
     fs.writeFileSync(filePath, rebuiltHtml, 'utf-8');
+    await uploadToMega(filename, Buffer.from(rebuiltHtml, 'utf-8'));
 
     const entry = {
       url,
@@ -103,9 +106,6 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
     }
     index.push(entry);
     fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
-
-    // Upload to MEGA
-    await uploadToMega(filename, filePath);
 
     const links = $('a[href]')
       .map((_, el) => $(el).attr('href'))
