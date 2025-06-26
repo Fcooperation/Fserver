@@ -1,7 +1,7 @@
 {
   "name": "fserver",
   "version": "1.0.0",
-  "description": "Fserver crawler with Puppeteer and MEGA upload",
+  "description": "Fserver crawler using Puppeteer and Chromium for full-page rendering, saves to MEGA.",
   "main": "index.js",
   "type": "module",
   "scripts": {
@@ -12,13 +12,13 @@
     "cheerio": "^1.0.0-rc.12",
     "express": "^4.19.2",
     "megajs": "^1.0.6",
-    "puppeteer": "^22.8.2",
-    "robots-parser": "^2.1.1"
+    "puppeteer": "^21.11.0",
+    "robots-parser": "^2.1.2"
   },
   "keywords": [
     "crawler",
-    "fserver",
     "puppeteer",
+    "fserver",
     "mega",
     "search"
   ],
