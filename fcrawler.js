@@ -1,58 +1,41 @@
-import puppeteer from 'puppeteer';
+import puppeteer from 'puppeteer-core';
 import fs from 'fs/promises';
 import path from 'path';
-import { fileURLToPath } from 'url';
-import { createRequire } from 'module';
-const require = createRequire(import.meta.url);
-const mega = require('megajs');
+import os from 'os';
+import mega from 'megajs';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
+// Hardcoded credentials (YOU control this account)
+const megaEmail = 'thefcooperation@gmail.com';
+const megaPassword = 'your_password_here'; // Change to your real password
 
-// Hardcoded credentials
-const email = 'thefcooperation@gmail.com';
-const password = '*Onyedika2009*'; // 🔒 Replace this with real MEGA password
-
-export async function crawlSite(startUrl) {
+export async function crawlSite(url) {
   const browser = await puppeteer.launch({
     headless: 'new',
+    executablePath: '/usr/bin/chromium',
     args: ['--no-sandbox', '--disable-setuid-sandbox']
   });
 
   const page = await browser.newPage();
-  await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 60000 });
+  console.log(`🌐 Visiting: ${url}`);
+  await page.goto(url, { waitUntil: 'networkidle2' });
 
   const html = await page.content();
-  const title = await page.title();
-  const safeTitle = title.replace(/[^\w\s]/gi, '').replace(/\s+/g, '_');
-  const filename = `${safeTitle}.html`;
-  const fullPath = path.join(__dirname, filename);
-  await fs.writeFile(fullPath, html);
-  console.log(`Saved: ${filename}`);
+  const filename = `page-${Date.now()}.html`;
+  const filepath = path.join(os.tmpdir(), filename);
+  await fs.writeFile(filepath, html, 'utf8');
+  console.log(`📄 Saved HTML to ${filepath}`);
 
-  await uploadToMega(fullPath, filename);
-  await browser.close();
-}
+  // Upload to MEGA
+  const storage = mega({ email: megaEmail, password: megaPassword });
+  await new Promise((resolve, reject) => storage.login(err => (err ? reject(err) : resolve())));
 
-async function uploadToMega(localPath, filename) {
-  const stream = require('fs').createReadStream(localPath);
-
-  const storage = mega({ email, password });
-  await new Promise((resolve, reject) => {
-    storage.login(err => {
-      if (err) return reject(err);
-      resolve();
-    });
-  });
-
-  const upload = storage.upload(filename);
-  stream.pipe(upload);
-
+  const upload = storage.upload(filename, fs.createReadStream(filepath));
   upload.on('complete', file => {
-    console.log('Uploaded to MEGA:', file.name);
+    console.log(`✅ Uploaded to MEGA: ${file.name}`);
   });
+  upload.on('error', console.error);
 
-  upload.on('error', err => {
-    console.error('Upload failed:', err);
-  });
+  await new Promise(resolve => upload.on('complete', resolve));
+
+  await browser.close();
 }
