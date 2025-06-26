@@ -1,15 +1,25 @@
 {
-  "name": "fserver-crawler",
+  "name": "fserver",
   "version": "1.0.0",
-  "type": "module",
+  "description": "Fserver crawler that extracts block HTML content and uploads to MEGA.",
   "main": "index.js",
+  "type": "module",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
     "axios": "^1.6.8",
     "cheerio": "^1.0.0-rc.12",
+    "express": "^4.18.4",
     "megajs": "^1.0.7",
     "robots-parser": "^2.1.1"
-  }
+  },
+  "keywords": [
+    "crawler",
+    "fserver",
+    "mega",
+    "search"
+  ],
+  "author": "F_cooperation",
+  "license": "MIT"
 }
