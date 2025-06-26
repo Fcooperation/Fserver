@@ -5,10 +5,10 @@ const app = express();
 const PORT = process.env.PORT || 10000;
 
 app.get('/', (req, res) => {
-  res.send('🌍 Fweb Crawler is Live');
+  res.send('🌐 Fserver is running and ready to crawl!');
 });
 
-app.listen(PORT, () => {
-  console.log(`🌐 Server listening on port ${PORT}`);
-  crawlSite('https://example.com'); // Replace with your start URL
+app.listen(PORT, async () => {
+  console.log(`🚀 Server running at http://localhost:${PORT}`);
+  await crawlSite();
 });
