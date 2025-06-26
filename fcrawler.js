@@ -13,13 +13,9 @@ const indexPath = path.join(crawledDir, 'search_index.json');
 const visited = new Set();
 const MAX_PAGES = 10;
 
-// MEGA Login (HARD-CODED)
-const storage = mega({
-  email: 'thefcooperation@gmail.com',
-  password: '*Onyedika2009*',
-  autoload: true,
-  keepalive: false
-});
+// === HARD-CODED MEGA CREDENTIALS ===
+const MEGA_EMAIL = 'thefcooperation@gmail.com';
+const MEGA_PASSWORD = '*Onyedika2009*';
 
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
@@ -39,14 +35,41 @@ async function getRobotsData(url) {
   }
 }
 
-async function uploadToMega(filePath, filename) {
+function cleanFileName(name) {
+  return name.replace(/[^\w]/g, '_').slice(0, 50) + '.html';
+}
+
+function rebuildStructuredHtml($) {
+  const blocks = $('body')
+    .find('p, div, section, article, img, ul, ol, pre, code')
+    .map((_, el) => $.html(el))
+    .get();
+
+  return `<!DOCTYPE html>
+<html><head><meta charset="utf-8"><title>${$('title').text()}</title></head><body>
+${blocks.join('\n')}
+</body></html>`;
+}
+
+async function uploadToMega(filename, localPath) {
   return new Promise((resolve, reject) => {
-    const upload = storage.upload(filename, fs.readFileSync(filePath));
-    upload.on('complete', file => {
-      console.log(`📤 Uploaded to MEGA: ${file.name}`);
-      resolve();
+    const storage = mega({ email: MEGA_EMAIL, password: MEGA_PASSWORD });
+
+    storage.once('ready', () => {
+      const fileStream = fs.createReadStream(localPath);
+      const upload = storage.upload(filename);
+
+      fileStream.pipe(upload);
+
+      upload.on('complete', () => {
+        console.log(`☁️ Uploaded to MEGA: ${filename}`);
+        resolve();
+      });
+
+      upload.on('error', reject);
     });
-    upload.on('error', reject);
+
+    storage.on('error', reject);
   });
 }
 
@@ -61,20 +84,10 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
   try {
     const res = await axios.get(url, { timeout: 10000 });
     const $ = cheerio.load(res.data);
-
     const title = $('title').text().trim() || 'untitled';
-    const filename = title.replace(/[^\w]/g, '_').slice(0, 50) + '.html';
+    const filename = cleanFileName(title);
     const filePath = path.join(crawledDir, filename);
-
-    // Rebuild page to preserve visual layout (basic reformation)
-    const rebuiltHtml = `
-      <!DOCTYPE html>
-      <html>
-      <head><meta charset="utf-8"><title>${title}</title></head>
-      <body>${$('body').html()}</body>
-      </html>
-    `.trim();
-
+    const rebuiltHtml = rebuildStructuredHtml($);
     fs.writeFileSync(filePath, rebuiltHtml, 'utf-8');
 
     const entry = {
@@ -92,7 +105,7 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
     fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
 
     // Upload to MEGA
-    await uploadToMega(filePath, filename);
+    await uploadToMega(filename, filePath);
 
     const links = $('a[href]')
       .map((_, el) => $(el).attr('href'))
