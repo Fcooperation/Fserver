@@ -7,19 +7,19 @@ import robotsParser from 'robots-parser';
 import crypto from 'crypto';
 import * as mega from 'megajs';
 
-// ⚠️ MEGA Login
+// ⚠️ MEGA Login Info
 const megaEmail = 'thefcooperation@gmail.com';
 const megaPassword = '*Onyedika2009*';
 
 const storageDir = './crawled';
 if (!fs.existsSync(storageDir)) fs.mkdirSync(storageDir);
 
-// Helper: generate a unique ID based on URL
+// Helper: hash the URL to generate unique filename base
 function hashUrl(url) {
   return crypto.createHash('md5').update(url).digest('hex');
 }
 
-// Check robots.txt permission
+// Check robots.txt
 async function checkRobotsTxt(siteUrl) {
   try {
     const robotsUrl = new URL('/robots.txt', siteUrl).href;
@@ -27,11 +27,11 @@ async function checkRobotsTxt(siteUrl) {
     const robots = robotsParser(robotsUrl, res.data);
     return robots.isAllowed(siteUrl);
   } catch {
-    return true; // allow if robots.txt fails or is missing
+    return true;
   }
 }
 
-// Crawl a page
+// MAIN FUNCTION
 export async function crawlPage(url) {
   const allowed = await checkRobotsTxt(url);
   if (!allowed) {
@@ -39,82 +39,70 @@ export async function crawlPage(url) {
     return;
   }
 
-  try {
-    const res = await axios.get(url, { timeout: 10000 });
-    const $ = cheerio.load(res.data);
+  console.log('🔐 Logging in to MEGA...');
+  const storage = new mega.Storage({ email: megaEmail, password: megaPassword }, () => {
+    storage.on('ready', async () => {
+      console.log('📂 MEGA storage ready.');
 
-    const title = $('title').text().trim() || 'Untitled';
-    const textBlocks = [];
+      try {
+        const res = await axios.get(url, { timeout: 10000 });
+        const $ = cheerio.load(res.data);
 
-    $('h1, h2, h3, p, li').each((_, el) => {
-      const text = $(el).text().trim();
-      if (text.length > 20) textBlocks.push(text);
-    });
+        const title = $('title').text().trim() || 'Untitled';
+        const textBlocks = [];
 
-    const textContent = textBlocks.join('\n\n');
-    const createdAt = new Date().toISOString();
-    const id = hashUrl(url);
-    const filename = `${id}_${createdAt}.json`;
-    const filepath = path.join(storageDir, filename);
+        $('h1, h2, h3, p, li').each((_, el) => {
+          const text = $(el).text().trim();
+          if (text.length > 20) textBlocks.push(text);
+        });
 
-    const pageData = {
-      url,
-      title,
-      text: textContent,
-      type: 'article',
-      createdAt
-    };
+        const textContent = textBlocks.join('\n\n');
+        const createdAt = new Date().toISOString();
+        const id = hashUrl(url);
+        const filename = `${id}_${createdAt}.json`;
+        const filepath = path.join(storageDir, filename);
 
-    fs.writeFileSync(filepath, JSON.stringify(pageData, null, 2));
-    console.log(`✅ Page saved locally: ${filename}`);
+        const pageData = {
+          url,
+          title,
+          text: textContent,
+          type: 'article',
+          createdAt
+        };
 
-    await uploadToMega(id, filename, filepath);
-  } catch (err) {
-    console.error(`❌ Failed to crawl ${url}:`, err.message);
-  }
-}
+        fs.writeFileSync(filepath, JSON.stringify(pageData, null, 2));
+        console.log(`✅ Page saved locally: ${filename}`);
 
-// Upload to MEGA
-async function uploadToMega(id, filename, filepath) {
-  return new Promise((resolve, reject) => {
-    console.log('🔐 Logging in to MEGA...');
-    const storage = new mega.Storage({
-      email: megaEmail,
-      password: megaPassword
-    }, () => {
-      storage.on('ready', () => {
-        console.log('📂 MEGA storage ready.');
-
-        // Delete old file with same ID
+        // Delete older version on MEGA (same ID/hash)
         const existing = storage.children.find(f => f.name.startsWith(id));
         if (existing) {
-          console.log(`🗑 Removing old file: ${existing.name}`);
+          console.log(`🗑 Removing old MEGA file: ${existing.name}`);
           existing.delete(err => {
             if (err) console.warn('⚠️ Failed to delete old file:', err.message);
           });
         }
 
-        // Upload new file
+        // Upload new version
         console.log(`📤 Uploading to MEGA: ${filename}`);
         const upload = storage.upload(filename);
         fs.createReadStream(filepath).pipe(upload);
 
         upload.on('complete', () => {
           console.log(`✅ Uploaded to MEGA: ${filename}`);
-          fs.unlinkSync(filepath); // Delete local copy
-          resolve();
+          fs.unlinkSync(filepath); // Delete local after upload
         });
 
         upload.on('error', (err) => {
           console.error('❌ Upload error:', err.message);
-          reject(err);
         });
-      });
+
+      } catch (err) {
+        console.error(`❌ Crawl failed: ${err.message}`);
+      }
     });
 
     storage.on('error', (err) => {
-      console.error('❌ MEGA login failed:', err.message);
-      reject(err);
+      console.error('❌ MEGA login error:', err.message);
     });
   });
 }
