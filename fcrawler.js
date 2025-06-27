@@ -36,7 +36,6 @@ async function getRobotsData(url) {
   }
 }
 
-// Upload if not already on MEGA
 async function uploadToMegaIfNotExists(filename, filePath) {
   return new Promise((resolve, reject) => {
     const storage = new Storage({ email: megaEmail, password: megaPassword });
@@ -71,6 +70,18 @@ async function uploadToMegaIfNotExists(filename, filePath) {
   });
 }
 
+function extractCreationDate($) {
+  // Try to find meta tags or time elements
+  const metaDate =
+    $('meta[property="article:published_time"]').attr('content') ||
+    $('meta[name="pubdate"]').attr('content') ||
+    $('meta[name="date"]').attr('content') ||
+    $('time').attr('datetime') ||
+    null;
+
+  return metaDate || new Date().toISOString(); // fallback to now
+}
+
 async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
   if (pageCount.count >= MAX_PAGES || visited.has(url)) return;
   if (!robots.parser.isAllowed(url, 'fcrawler')) return;
@@ -84,18 +95,59 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
     const $ = cheerio.load(res.data, { decodeEntities: false });
 
     const title = $('title').text().trim() || 'untitled';
-    const filename = title.replace(/[^\w]/g, '_').slice(0, 50) + '.html';
+    const createdDate = extractCreationDate($);
+
+    const contentBlocks = [];
+
+    $('h1, h2, p').each((_, el) => {
+      contentBlocks.push({
+        type: el.tagName,
+        text: $(el).text().trim()
+      });
+    });
+
+    $('img').each((_, el) => {
+      const src = $(el).attr('src');
+      if (src) {
+        contentBlocks.push({
+          type: 'image',
+          src: new URL(src, url).href,
+          alt: $(el).attr('alt') || ''
+        });
+      }
+    });
+
+    $('a[href]').each((_, el) => {
+      const href = $(el).attr('href');
+      const link = new URL(href, url).href;
+      contentBlocks.push({
+        type: 'link',
+        text: $(el).text().trim(),
+        href: link
+      });
+    });
+
+    const jsonData = {
+      url,
+      title,
+      createdAt: createdDate,
+      crawledAt: new Date().toISOString(),
+      blocks: contentBlocks
+    };
+
+    const safeName = title.replace(/[^\w]/g, '_').slice(0, 50);
+    const filename = `${safeName}_${createdDate.replace(/[:.]/g, '-')}.json`;
     const filePath = path.join(crawledDir, filename);
 
-    // Ensure HTML block structure preserved
-    const htmlContent = `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="UTF-8">\n<title>${title}</title>\n</head>\n<body>\n${$('body').html()}\n</body>\n</html>`;
-    fs.writeFileSync(filePath, htmlContent, 'utf-8');
+    if (!fs.existsSync(crawledDir)) fs.mkdirSync(crawledDir);
+    fs.writeFileSync(filePath, JSON.stringify(jsonData, null, 2), 'utf-8');
+    console.log(`✅ Page saved locally: ${filename}`);
 
     const entry = {
       url,
       title,
       filename,
-      text: $('body').text().trim().slice(0, 500)
+      createdAt: createdDate
     };
 
     let index = [];
@@ -107,6 +159,7 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
 
     await uploadToMegaIfNotExists(filename, filePath);
 
+    // Follow links recursively
     const links = $('a[href]')
       .map((_, el) => $(el).attr('href'))
       .get()
