@@ -5,7 +5,6 @@ import * as cheerio from 'cheerio';
 import robotsParser from 'robots-parser';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { Storage } from 'megajs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const crawledDir = path.join(__dirname, 'crawled');
@@ -13,13 +12,12 @@ const indexPath = path.join(crawledDir, 'search_index.json');
 const visited = new Set();
 const MAX_PAGES = 10;
 
-const megaEmail = 'thefcooperation@gmail.com';
-const megaPassword = '*Onyedika2009*';
-
+// Delay between requests
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
+// Check and parse robots.txt
 async function getRobotsData(url) {
   try {
     const robotsUrl = new URL('/robots.txt', url).href;
@@ -32,48 +30,6 @@ async function getRobotsData(url) {
   } catch {
     return { parser: { isAllowed: () => true }, delay: 2000 };
   }
-}
-
-async function uploadToMegaIfNotExists(filename, filePath) {
-  return new Promise((resolve, reject) => {
-    const storage = new Storage({ email: megaEmail, password: megaPassword });
-
-    storage.on('ready', async () => {
-      const files = Object.values(storage.files);
-      const exists = files.some(file => file.name === filename);
-
-      if (exists) {
-        console.log(`⏩ Skipped (already exists): ${filename}`);
-        return resolve();
-      }
-
-      const stats = fs.statSync(filePath);
-      const size = stats.size;
-      const stream = fs.createReadStream(filePath);
-
-      const upload = storage.upload(filename, stream, {
-        size,
-        allowUploadBuffering: true
-      });
-
-      upload.on('complete', () => {
-        console.log(`📤 Uploaded to MEGA: ${filename}`);
-        resolve();
-      });
-
-      upload.on('error', err => {
-        console.error(`❌ Upload error: ${err.message}`);
-        reject(err);
-      });
-    });
-
-    storage.on('error', err => {
-      console.error(`❌ MEGA login failed: ${err.message}`);
-      reject(err);
-    });
-
-    storage.login();
-  });
 }
 
 async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
@@ -95,6 +51,11 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
     const htmlContent = `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="UTF-8">\n<title>${title}</title>\n</head>\n<body>\n${$('body').html()}\n</body>\n</html>`;
     fs.writeFileSync(filePath, htmlContent, 'utf-8');
 
+    // 👉 Check file size after saving
+    const stats = fs.statSync(filePath);
+    const fileSizeKB = (stats.size / 1024).toFixed(2);
+    console.log(`📏 File size: ${fileSizeKB} KB`);
+
     const entry = {
       url,
       title,
@@ -109,7 +70,7 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
     index.push(entry);
     fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
 
-    await uploadToMegaIfNotExists(filename, filePath);
+    // Skip MEGA upload for now
 
     const links = $('a[href]')
       .map((_, el) => $(el).attr('href'))
