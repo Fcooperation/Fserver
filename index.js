@@ -1,24 +1,17 @@
-// index.js
-
 import express from 'express';
-import { checkRobotsTxt } from './fcrawler.js';
+import { crawlPage } from './fcrawler.js';
 
 const app = express();
-const PORT = 3000;
+const PORT = process.env.PORT || 3000;
 
-// Change this to test any other site
-const START_URL = 'https://www.google.com/';
-
-app.get('/', async (req, res) => {
-  const allowed = await checkRobotsTxt(START_URL);
-  if (allowed) {
-    res.send(`✅ Allowed to crawl: ${START_URL}`);
-    // (You can start full crawling here later)
-  } else {
-    res.send(`⛔ Not allowed to crawl: ${START_URL}`);
-  }
+app.get('/', (_, res) => {
+  res.send('✅ Fcrawler is running and port is open');
 });
 
+// Run crawler when app starts
+const startUrl = 'https://www.google.com/';
+crawlPage(startUrl);
+
 app.listen(PORT, () => {
-  console.log(`🚀 Server running at http://localhost:${PORT}`);
+  console.log(`🚀 Server running on http://localhost:${PORT}`);
 });
