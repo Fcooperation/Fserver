@@ -7,19 +7,19 @@ import robotsParser from 'robots-parser';
 import crypto from 'crypto';
 import * as mega from 'megajs';
 
-// ⚠️ MEGA Login — hardcoded
+// ⚠️ Hardcoded MEGA credentials
 const megaEmail = 'thefcooperation@gmail.com';
 const megaPassword = '*Onyedika2009*';
 
 const storageDir = './crawled';
 if (!fs.existsSync(storageDir)) fs.mkdirSync(storageDir);
 
-// Create a hash of the URL to use as filename
+// Helper: generate filename hash
 function hashUrl(url) {
   return crypto.createHash('md5').update(url).digest('hex');
 }
 
-// Robots.txt check
+// Robots.txt checker
 async function checkRobotsTxt(siteUrl) {
   try {
     const robotsUrl = new URL('/robots.txt', siteUrl).href;
@@ -27,11 +27,11 @@ async function checkRobotsTxt(siteUrl) {
     const robots = robotsParser(robotsUrl, res.data);
     return robots.isAllowed(siteUrl);
   } catch {
-    return true; // allow if robots.txt not found
+    return true; // allow if robots.txt is missing
   }
 }
 
-// Main crawler
+// Main crawl function
 export async function crawlPage(url) {
   const allowed = await checkRobotsTxt(url);
   if (!allowed) {
@@ -45,6 +45,7 @@ export async function crawlPage(url) {
 
     const title = $('title').text().trim() || 'Untitled';
     const textBlocks = [];
+
     $('h1, h2, h3, p, li').each((_, el) => {
       const text = $(el).text().trim();
       if (text.length > 20) textBlocks.push(text);
@@ -73,10 +74,13 @@ export async function crawlPage(url) {
   }
 }
 
-// Uploads to MEGA and removes older versions
+// Upload and remove outdated copies
 async function uploadToMega(id, filename, filepath) {
   return new Promise((resolve, reject) => {
-    const storage = mega.storage({ email: megaEmail, password: megaPassword }, () => {
+    const storage = new mega.Storage({
+      email: megaEmail,
+      password: megaPassword
+    }, () => {
       storage.on('ready', () => {
         const existing = storage.children.find(f => f.name.startsWith(id));
         if (existing) {
@@ -92,7 +96,7 @@ async function uploadToMega(id, filename, filepath) {
 
         upload.on('complete', () => {
           console.log(`✅ Uploaded to MEGA: ${filename}`);
-          fs.unlinkSync(filepath);
+          fs.unlinkSync(filepath); // delete local file
           resolve();
         });
 
