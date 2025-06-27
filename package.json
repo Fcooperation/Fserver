@@ -1,16 +1,16 @@
 {
-  "name": "fweb-crawler",
+  "name": "fcrawler",
   "version": "1.0.0",
-  "description": "Starter for Fweb fcrawler with robots.txt check and express server",
-  "main": "index.js",
+  "description": "Fweb site crawler with robots.txt, text + title extraction, and MEGA sync",
+  "main": "fcrawler.js",
   "type": "module",
   "scripts": {
     "start": "node index.js"
   },
   "dependencies": {
-    "axios": "^1.6.7",
+    "axios": "^1.6.8",
     "cheerio": "^1.0.0-rc.12",
-    "express": "^4.19.2",
-    "robots-parser": "^2.1.1"
+    "megajs": "^1.0.6",
+    "robots-parser": "2.1.1"
   }
 }
