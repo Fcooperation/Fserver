@@ -89,37 +89,27 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
     const $ = cheerio.load(res.data, { decodeEntities: false });
 
     const title = $('title').text().trim() || 'untitled';
-    const cleanTitle = title.replace(/[^\w]/g, '_').slice(0, 50);
-    const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-    const filename = `${cleanTitle}_${timestamp}.json`;
+    const filename = title.replace(/[^\w]/g, '_').slice(0, 50) + '.html';
     const filePath = path.join(crawledDir, filename);
 
-    const pageData = {
+    const htmlContent = `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="UTF-8">\n<title>${title}</title>\n</head>\n<body>\n${$('body').html()}\n</body>\n</html>`;
+    fs.writeFileSync(filePath, htmlContent, 'utf-8');
+
+    const entry = {
       url,
       title,
-      text: $('body').text().trim().slice(0, 500),
-      html: $('body').html()
+      filename,
+      text: $('body').text().trim().slice(0, 500)
     };
-
-    fs.writeFileSync(filePath, JSON.stringify(pageData, null, 2), 'utf-8');
-    console.log(`✅ Page saved locally: ${filename}`);
 
     let index = [];
     if (fs.existsSync(indexPath)) {
       index = JSON.parse(fs.readFileSync(indexPath));
     }
-
-    index.push({
-      url,
-      title,
-      filename,
-      text: pageData.text
-    });
-
+    index.push(entry);
     fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
 
     await uploadToMegaIfNotExists(filename, filePath);
-    await uploadToMegaIfNotExists('search_index.json', indexPath);
 
     const links = $('a[href]')
       .map((_, el) => $(el).attr('href'))
