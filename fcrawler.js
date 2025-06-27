@@ -13,16 +13,15 @@ const indexPath = path.join(crawledDir, 'search_index.json');
 const visited = new Set();
 const MAX_PAGES = 10;
 
-// MEGA credentials
 const megaEmail = 'thefcooperation@gmail.com';
 const megaPassword = '*Onyedika2009*';
 
-// Sleep between requests
+// Delay between requests
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Robots.txt parser
+// Check robots.txt and get crawl delay
 async function getRobotsData(url) {
   try {
     const robotsUrl = new URL('/robots.txt', url).href;
@@ -37,7 +36,7 @@ async function getRobotsData(url) {
   }
 }
 
-// Upload file to MEGA if not already there
+// Upload file to MEGA (only if not exists), with file size specified
 async function uploadToMegaIfNotExists(filename, filePath) {
   return new Promise((resolve, reject) => {
     const storage = new Storage({ email: megaEmail, password: megaPassword });
@@ -51,9 +50,9 @@ async function uploadToMegaIfNotExists(filename, filePath) {
         return resolve();
       }
 
-      const upload = storage.upload(filename, fs.createReadStream(filePath), {
-        allowUploadBuffering: true // ✅ FIXED
-      });
+      const size = fs.statSync(filePath).size;
+      const stream = fs.createReadStream(filePath);
+      const upload = storage.upload(filename, stream, { size });
 
       upload.on('complete', () => {
         console.log(`📤 Uploaded: ${filename}`);
@@ -75,7 +74,7 @@ async function uploadToMegaIfNotExists(filename, filePath) {
   });
 }
 
-// Crawl a page and extract content
+// Main crawl function per page
 async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
   if (pageCount.count >= MAX_PAGES || visited.has(url)) return;
   if (!robots.parser.isAllowed(url, 'fcrawler')) return;
@@ -89,36 +88,18 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
     const $ = cheerio.load(res.data, { decodeEntities: false });
 
     const title = $('title').text().trim() || 'untitled';
-    const createdDate =
-      $('meta[property="article:published_time"]').attr('content') ||
-      $('meta[name="date"]').attr('content') ||
-      $('time').first().attr('datetime') ||
-      'unknown';
-
-    const filename =
-      title.replace(/[^\w]/g, '_').slice(0, 50) +
-      `_${new Date().toISOString().split('T')[0]}.html`;
+    const filename = title.replace(/[^\w]/g, '_').slice(0, 50) + '.html';
     const filePath = path.join(crawledDir, filename);
 
-    // Wrap structured HTML
-    const htmlContent = `<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>${title}</title>
-</head>
-<body>
-${$('body').html()}
-</body>
-</html>`;
-
+    // Build full HTML content for the snapshot
+    const htmlContent = `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="UTF-8">\n<title>${title}</title>\n</head>\n<body>\n${$('body').html()}\n</body>\n</html>`;
     fs.writeFileSync(filePath, htmlContent, 'utf-8');
 
+    // Save index entry
     const entry = {
       url,
       title,
       filename,
-      created: createdDate,
       text: $('body').text().trim().slice(0, 500)
     };
 
@@ -129,9 +110,10 @@ ${$('body').html()}
     index.push(entry);
     fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
 
+    // Upload to MEGA
     await uploadToMegaIfNotExists(filename, filePath);
 
-    // Crawl links
+    // Crawl next links
     const links = $('a[href]')
       .map((_, el) => $(el).attr('href'))
       .get()
@@ -147,10 +129,17 @@ ${$('body').html()}
   }
 }
 
-// Exported function to crawl a site
+// Entry point
 export async function crawlSite(startUrl) {
   if (!fs.existsSync(crawledDir)) fs.mkdirSync(crawledDir);
+
   const robots = await getRobotsData(startUrl);
   await crawlPage(startUrl, robots, robots.delay);
-  console.log('✅ Crawl complete. Search index saved.');
+
+  // ✅ Upload the index JSON
+  if (fs.existsSync(indexPath)) {
+    await uploadToMegaIfNotExists('search_index.json', indexPath);
+  }
+
+  console.log('✅ Crawl complete. Search index saved and uploaded.');
 }
