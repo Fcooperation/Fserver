@@ -1,8 +1,8 @@
 {
   "name": "fcrawler",
-  "version": "1.0.0",
-  "description": "Fweb site crawler with robots.txt, text + title extraction, and MEGA sync",
-  "main": "fcrawler.js",
+  "version": "1.0.1",
+  "description": "Fweb crawler backend with express, MEGA, cheerio, robots-parser, etc.",
+  "main": "index.js",
   "type": "module",
   "scripts": {
     "start": "node index.js"
@@ -10,6 +10,7 @@
   "dependencies": {
     "axios": "^1.6.8",
     "cheerio": "^1.0.0-rc.12",
+    "express": "^4.19.2",
     "megajs": "^1.0.6",
     "robots-parser": "2.1.1"
   }
