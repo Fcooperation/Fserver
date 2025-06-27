@@ -7,19 +7,19 @@ import robotsParser from 'robots-parser';
 import crypto from 'crypto';
 import * as mega from 'megajs';
 
-// ⚠️ Hardcoded MEGA credentials
+// ⚠️ MEGA Login
 const megaEmail = 'thefcooperation@gmail.com';
 const megaPassword = '*Onyedika2009*';
 
 const storageDir = './crawled';
 if (!fs.existsSync(storageDir)) fs.mkdirSync(storageDir);
 
-// Helper: generate filename hash
+// Helper: generate a unique ID based on URL
 function hashUrl(url) {
   return crypto.createHash('md5').update(url).digest('hex');
 }
 
-// Robots.txt checker
+// Check robots.txt permission
 async function checkRobotsTxt(siteUrl) {
   try {
     const robotsUrl = new URL('/robots.txt', siteUrl).href;
@@ -27,11 +27,11 @@ async function checkRobotsTxt(siteUrl) {
     const robots = robotsParser(robotsUrl, res.data);
     return robots.isAllowed(siteUrl);
   } catch {
-    return true; // allow if robots.txt is missing
+    return true; // allow if robots.txt fails or is missing
   }
 }
 
-// Main crawl function
+// Crawl a page
 export async function crawlPage(url) {
   const allowed = await checkRobotsTxt(url);
   if (!allowed) {
@@ -74,33 +74,41 @@ export async function crawlPage(url) {
   }
 }
 
-// Upload and remove outdated copies
+// Upload to MEGA
 async function uploadToMega(id, filename, filepath) {
   return new Promise((resolve, reject) => {
+    console.log('🔐 Logging in to MEGA...');
     const storage = new mega.Storage({
       email: megaEmail,
       password: megaPassword
     }, () => {
       storage.on('ready', () => {
+        console.log('📂 MEGA storage ready.');
+
+        // Delete old file with same ID
         const existing = storage.children.find(f => f.name.startsWith(id));
         if (existing) {
           console.log(`🗑 Removing old file: ${existing.name}`);
-          existing.delete((err) => {
-            if (err) console.error('⚠️ Failed to delete old version:', err.message);
+          existing.delete(err => {
+            if (err) console.warn('⚠️ Failed to delete old file:', err.message);
           });
         }
 
-        console.log(`📤 Uploading: ${filename}`);
+        // Upload new file
+        console.log(`📤 Uploading to MEGA: ${filename}`);
         const upload = storage.upload(filename);
         fs.createReadStream(filepath).pipe(upload);
 
         upload.on('complete', () => {
           console.log(`✅ Uploaded to MEGA: ${filename}`);
-          fs.unlinkSync(filepath); // delete local file
+          fs.unlinkSync(filepath); // Delete local copy
           resolve();
         });
 
-        upload.on('error', reject);
+        upload.on('error', (err) => {
+          console.error('❌ Upload error:', err.message);
+          reject(err);
+        });
       });
     });
 
