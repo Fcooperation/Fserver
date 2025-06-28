@@ -1,149 +1,129 @@
-import * as cheerio from 'cheerio';
-import axios from 'axios';
-import fs from 'fs/promises';
+import fs from 'fs';
 import path from 'path';
+import axios from 'axios';
+import * as cheerio from 'cheerio';
+import robotsParser from 'robots-parser';
 import { fileURLToPath } from 'url';
+import { dirname } from 'path';
 import { Storage } from 'megajs';
-import crypto from 'crypto';
-import { JSDOM } from 'jsdom';
 
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-
-const visited = new Set();
-let pageCount = 0;
-
+const __dirname = dirname(fileURLToPath(import.meta.url));
+const crawledDir = path.join(__dirname, 'crawled');
+const indexPath = path.join(crawledDir, 'search_index.json');
 const MAX_PAGES = 10;
+const visitedUrls = new Set();
 const searchIndex = [];
 
-function sanitizeFilename(str) {
-  return str.replace(/[^a-z0-9]/gi, '_').substring(0, 100);
+// Setup MEGA storage
+const storage = new Storage({
+  email: 'thefcooperation@gmail.com',
+  password: '*Onyedika2009*' // Replace with your password
+});
+
+// Helper: format filename safely
+function formatFilename(title) {
+  return title.replace(/[^a-z0-9]/gi, '_').replace(/_+/g, '_') + '.html';
 }
 
-async function getHtml(url) {
-  const res = await axios.get(url, { timeout: 10000 });
-  return res.data;
-}
-
-function extractSentences(text) {
-  return text
-    .replace(/\s+/g, ' ')
-    .match(/[^\.!\?]+[\.!\?]+/g)
-    ?.map(s => s.trim())
-    .filter(Boolean) || [];
-}
-
-function generateFilename(title, url) {
-  const titlePart = sanitizeFilename(title || 'page');
-  const urlHash = crypto.createHash('md5').update(url).digest('hex').substring(0, 6);
-  return `${titlePart}_${urlHash}.html`;
-}
-
-async function saveToFile(filename, content) {
-  const fullPath = path.join(__dirname, 'saved', filename);
-  await fs.mkdir(path.dirname(fullPath), { recursive: true });
-  await fs.writeFile(fullPath, content, 'utf8');
-  return fullPath;
-}
-
-async function getFileSizeInKB(filepath) {
-  const stat = await fs.stat(filepath);
-  return stat.size / 1024;
-}
-
-async function uploadToMega(filepath, filename) {
-  const storage = new Storage({
-    email: 'thefcooperation@gmail.com',
-    password: '*Onyedika2009*',
-  });
-
-  return new Promise((resolve, reject) => {
-    storage.on('ready', async () => {
-      try {
-        const stream = await fs.readFile(filepath);
-        const upload = storage.upload(filename, stream.length, {
-          allowUploadBuffering: true,
-        });
-        upload.end(stream);
-        upload.on('complete', () => {
-          console.log(`📤 Uploaded: ${filename}`);
-          resolve();
-        });
-      } catch (err) {
-        reject(err);
-      }
+// Helper: check if file exists in MEGA
+async function fileExistsInMega(filename) {
+  return new Promise((resolve) => {
+    let found = false;
+    storage.on('ready', () => {
+      storage.root.children.forEach(file => {
+        if (file.name === filename) {
+          found = true;
+        }
+      });
+      resolve(found);
     });
-    storage.on('error', reject);
-    storage.login();
   });
 }
 
-function parseLinks($, baseUrl) {
-  const base = new URL(baseUrl);
-  return $('a[href]')
-    .map((_, el) => $(el).attr('href'))
-    .get()
-    .map(href => {
-      try {
-        return new URL(href, base).toString();
-      } catch {
-        return null;
-      }
-    })
-    .filter(link => link && !visited.has(link));
-}
-
-export async function crawlSite(startUrl) {
-  pageCount = 0;
-  visited.clear();
-  searchIndex.length = 0;
-  await crawlPage(startUrl);
-  const indexPath = path.join(__dirname, 'saved', 'search_index.json');
-  await fs.writeFile(indexPath, JSON.stringify(searchIndex, null, 2));
-  console.log('✅ Crawl complete. Search index saved.');
-}
-
-async function crawlPage(url) {
-  if (visited.has(url) || pageCount >= MAX_PAGES) return;
-  visited.add(url);
-  pageCount++;
-
-  console.log(`📄 Crawling: ${url}`);
+async function crawl(url, depth = 0) {
+  if (visitedUrls.has(url) || visitedUrls.size >= MAX_PAGES) return;
+  visitedUrls.add(url);
 
   try {
-    const html = await getHtml(url);
-    const $ = cheerio.load(html);
-    const title = $('title').text() || 'Untitled';
-    const bodyHtml = $('body').html() || '';
-    const textContent = $('body').text();
-    const sentences = extractSentences(textContent);
-    const structuredHtml = `<html><head><title>${title}</title></head><body>${bodyHtml}</body></html>`;
-    const filename = generateFilename(title, url);
-    const savedPath = await saveToFile(filename, structuredHtml);
-    const fileSizeKB = await getFileSizeInKB(savedPath);
+    const robotsUrl = new URL('/robots.txt', url).href;
+    const robotsRes = await axios.get(robotsUrl).catch(() => null);
+    const robots = robotsRes ? robotsParser(robotsUrl, robotsRes.data) : null;
+    if (robots && !robots.isAllowed(url)) return;
 
-    console.log(`📏 File size: ${fileSizeKB.toFixed(2)} KB`);
+    const res = await axios.get(url);
+    const $ = cheerio.load(res.data);
+    const title = $('title').text() || 'untitled';
+    const filename = formatFilename(title);
 
-    // Upload if file is readable
-    if (fileSizeKB > 0) {
-      await uploadToMega(savedPath, filename);
-    }
+    // Try to get last-modified from header
+    const lastModified = res.headers['last-modified'] || new Date().toISOString();
 
-    // Save to search index
+    // Build content with inline text + images
+    let bodyContent = '';
+    $('p, h1, h2, h3, h4, img').each((_, el) => {
+      if (el.tagName === 'img') {
+        const src = $(el).attr('src');
+        if (src) bodyContent += `<img src="${src}" /><br/>`;
+      } else {
+        bodyContent += `<${el.tagName}>${$(el).text()}</${el.tagName}>`;
+      }
+    });
+
+    const htmlContent = `
+      <html><head><title>${title}</title></head>
+      <body>${bodyContent}</body></html>
+    `;
+    const filePath = path.join(crawledDir, filename);
+    fs.writeFileSync(filePath, htmlContent);
+
+    // Measure file size
+    const fileSize = fs.statSync(filePath).size;
+    const kbSize = (fileSize / 1024).toFixed(2);
+    console.log(`📏 File size: ${kbSize} KB`);
+
+    // Check if already uploaded
+    storage.once('ready', async () => {
+      const exists = await fileExistsInMega(filename);
+      if (exists) {
+        console.log(`⏩ Skipped (already in MEGA): ${filename}`);
+        return;
+      }
+
+      // Upload to MEGA
+      const upload = storage.upload(filename, fs.createReadStream(filePath));
+      upload.complete = () => {
+        console.log(`📤 Uploaded to MEGA: ${filename}`);
+      };
+    });
+
+    // Add to search index
     searchIndex.push({
-      url,
       title,
+      url,
       filename,
-      text: textContent,
-      sentences,
+      size: fileSize,
+      createdAt: lastModified,
+      text: $('body').text().trim()
     });
 
     // Crawl next links
-    const links = parseLinks($, url);
+    const links = $('a[href]').map((_, el) => $(el).attr('href')).get();
     for (const link of links) {
-      await crawlPage(link);
+      const absolute = new URL(link, url).href;
+      await crawl(absolute, depth + 1);
     }
   } catch (err) {
-    console.error(`❌ Failed to crawl ${url}:`, err.message);
+    console.error(`❌ Failed to crawl ${url}: ${err.message}`);
   }
 }
+
+(async () => {
+  if (!fs.existsSync(crawledDir)) fs.mkdirSync(crawledDir);
+
+  console.log(`📄 Crawling: https://www.google.com/`);
+  await new Promise(resolve => storage.once('ready', resolve));
+  await crawl('https://www.google.com/');
+
+  fs.writeFileSync(indexPath, JSON.stringify(searchIndex, null, 2));
+  console.log('✅ Crawl complete. Search index saved.');
+})();
