@@ -54,7 +54,7 @@ async function getFileSizeInKB(filepath) {
 async function uploadToMega(filepath, filename) {
   const storage = new Storage({
     email: 'thefcooperation@gmail.com',
-    password: 'YourMegaPassword',
+    password: '*Onyedika2009*',
   });
 
   return new Promise((resolve, reject) => {
