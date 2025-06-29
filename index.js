@@ -24,7 +24,7 @@ app.get('/api/search', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}/`);
-  const startUrl = 'https://www.govinfo.gov/app/collection/crecb/';
+  const startUrl = 'https://https://file-examples.com/index.php/sample-documents-download/sample-pdf-download//';
   console.log(`📄 Crawling: ${startUrl}`);
   crawlSite(startUrl);
 });
