@@ -24,7 +24,7 @@ app.get('/api/search', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}/`);
-  const startUrl = 'https://https://file-examples.com/';
+  const startUrl = 'https://https://google.com/';
   console.log(`📄 Crawling: ${startUrl}`);
   crawlSite(startUrl);
 });
