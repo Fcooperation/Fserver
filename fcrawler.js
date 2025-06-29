@@ -14,7 +14,7 @@ const visited = new Set();
 const MAX_PAGES = 10;
 
 const txtMega = { email: 'thefcooperation@gmail.com', password: '*Onyedika2009*' };
-const imgMega = { email: 'fproject0000002@gmail.com', password: '*Onyedika2009*' };
+const imgMega = { email: 'fproject0000009@gmail.com', password: 'Onyedika' };
 
 // Utility
 function sleep(ms) {
