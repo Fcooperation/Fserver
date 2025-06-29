@@ -2,120 +2,193 @@ import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
+import robotsParser from 'robots-parser';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 import { Storage } from 'megajs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 const crawledDir = path.join(__dirname, 'crawled');
-if (!fs.existsSync(crawledDir)) fs.mkdirSync(crawledDir);
+const indexPath = path.join(crawledDir, 'search_index.json');
+const visited = new Set();
+const MAX_PAGES = 10;
 
-// Login accounts
-const megaAccounts = {
+// MEGA logins
+const MEGA_ACCOUNTS = {
   text: { email: 'thefcooperation@gmail.com', password: '*Onyedika2009*' },
   images: { email: 'fprojectimages@gmail.com', password: '*Onyedika2009*' },
-  documents: { email: 'fprojectdocuments@gmail.com', password: '*Onyedika2009*' },
+  docs: { email: 'fprojectdocuments@gmail.com', password: '*Onyedika2009*' },
 };
 
-// Utility to upload file to MEGA
-async function uploadToMega(type, filePath, fileName) {
-  const { email, password } = megaAccounts[type];
-  const storage = new Storage({ email, password });
-  return new Promise((resolve, reject) => {
-    storage.on('ready', () => {
-      storage.upload(fileName, fs.createReadStream(filePath)).complete((err, file) => {
-        if (err) reject(err);
-        else {
-          console.log(`📤 Uploaded to MEGA (${type}): ${fileName}`);
-          resolve();
-        }
-      });
-    });
-    storage.on('error', reject);
-  });
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Detect if URL is a document
-function isDocument(url) {
-  return url.match(/\.(pdf|docx?|pptx?|xlsx?|txt)$/i);
-}
-function isImage(url) {
-  return url.match(/\.(png|jpe?g|gif|bmp|webp|svg)$/i);
-}
-
-async function crawl(url, visited = new Set()) {
-  if (visited.has(url)) return;
-  visited.add(url);
+async function getRobotsData(url) {
   try {
-    const res = await axios.get(url, { timeout: 15000 });
-    const $ = cheerio.load(res.data);
-    const pageTitle = $('title').text() || 'Untitled';
-    const safeTitle = pageTitle.replace(/[^\w\s]/g, '_').replace(/\s+/g, '_');
-    const htmlPath = path.join(crawledDir, `${safeTitle}.html`);
-    if (fs.existsSync(htmlPath)) {
-      console.log(`⏩ Skipped (already exists): ${safeTitle}.html`);
-    } else {
-      fs.writeFileSync(htmlPath, $.html());
-      await uploadToMega('text', htmlPath, `${safeTitle}.html`);
-    }
-
-    $('img').each(async (_, img) => {
-      const src = $(img).attr('src');
-      if (!src || !isImage(src)) return;
-      const absoluteUrl = new URL(src, url).href;
-      const filename = path.basename(absoluteUrl.split('?')[0]);
-      const imgPath = path.join(crawledDir, filename);
-      if (fs.existsSync(imgPath)) {
-        console.log(`⏩ Skipped (already exists): ${filename}`);
-        return;
-      }
-      try {
-        const imgRes = await axios.get(absoluteUrl, { responseType: 'arraybuffer' });
-        fs.writeFileSync(imgPath, imgRes.data);
-        console.log(`🖼️ Downloaded image: ${filename}`);
-        await uploadToMega('images', imgPath, filename);
-      } catch (e) {
-        console.log(`⚠️ Failed image: ${src}`);
-      }
-    });
-
-    $('a').each(async (_, link) => {
-      const href = $(link).attr('href');
-      if (!href) return;
-      const fullUrl = new URL(href, url).href;
-
-      // Thumbnail box for documents
-      if (isDocument(fullUrl)) {
-        const fileName = path.basename(fullUrl.split('?')[0]);
-        const ext = fileName.split('.').pop().toLowerCase();
-        const icon = `https://upload.wikimedia.org/wikipedia/commons/8/87/PDF_file_icon.svg`; // basic icon (you can customize per ext)
-        const thumbHtml = `
-          <div style="border:1px solid #ccc;padding:10px;width:300px;margin:10px;">
-            <img src="${icon}" alt="${ext}" style="width:30px;vertical-align:middle;">
-            <a href="${fullUrl}" target="_blank" style="margin-left:10px;">${fileName}</a>
-          </div>
-        `;
-        const thumbPath = path.join(crawledDir, `${fileName}.html`);
-        if (!fs.existsSync(thumbPath)) {
-          fs.writeFileSync(thumbPath, thumbHtml);
-          await uploadToMega('documents', thumbPath, `${fileName}.html`);
-        } else {
-          console.log(`⏩ Skipped (already exists): ${fileName}.html`);
-        }
-      }
-
-      // Crawl deeper
-      if (fullUrl.startsWith('http') && !visited.has(fullUrl)) {
-        await crawl(fullUrl, visited);
-      }
-    });
-
-  } catch (err) {
-    console.log(`❌ Error crawling ${url}: ${err.message}`);
+    const robotsUrl = new URL('/robots.txt', url).href;
+    const res = await axios.get(robotsUrl);
+    const robots = robotsParser(robotsUrl, res.data);
+    return {
+      parser: robots,
+      delay: robots.getCrawlDelay('fcrawler') || 2000,
+    };
+  } catch {
+    return { parser: { isAllowed: () => true }, delay: 2000 };
   }
 }
 
-// Start crawling
-const startUrl = 'https://govinfo.gov/';
-console.log(`🚀 Server running on http://localhost:10000/`);
-crawl(startUrl);
+async function uploadToMega({ filename, filePath, fileSize, type }) {
+  const { email, password } = MEGA_ACCOUNTS[type];
+  return new Promise((resolve, reject) => {
+    const storage = new Storage({ email, password });
+
+    storage.on('ready', () => {
+      const exists = Object.values(storage.files).some(f => f.name === filename);
+      if (exists) {
+        console.log(`⏩ Skipped (already exists): ${filename}`);
+        return resolve();
+      }
+
+      const stream = fs.createReadStream(filePath);
+      const upload = storage.upload({ name: filename, size: fileSize }, stream);
+
+      upload.on('complete', () => {
+        console.log(`📤 Uploaded: ${filename}`);
+        resolve();
+      });
+
+      upload.on('error', err => {
+        console.error(`❌ Upload error: ${err.message}`);
+        reject(err);
+      });
+    });
+
+    storage.on('error', err => {
+      console.error(`❌ MEGA login failed: ${err.message}`);
+      reject(err);
+    });
+
+    storage.login();
+  });
+}
+
+async function handleImage(src, baseUrl) {
+  try {
+    const url = new URL(src, baseUrl).href;
+    const response = await axios.get(url, { responseType: 'arraybuffer' });
+    const buffer = Buffer.from(response.data);
+    const filename = path.basename(url.split('?')[0]);
+    const filePath = path.join(crawledDir, filename);
+
+    fs.writeFileSync(filePath, buffer);
+    const fileSize = fs.statSync(filePath).size;
+
+    console.log(`🖼️ Downloaded image: ${filename}`);
+    await uploadToMega({ filename, filePath, fileSize, type: 'images' });
+  } catch (err) {
+    console.warn(`⚠️ Image failed: ${src}`);
+  }
+}
+
+function generateDocThumbnail(fileUrl) {
+  const filename = path.basename(fileUrl.split('?')[0]);
+  const ext = filename.split('.').pop().toLowerCase();
+  const icon = ext === 'pdf' ? '📄' : ext === 'zip' ? '🗜️' : '📁';
+
+  return `
+    <div style="border:1px solid #ccc;padding:8px;margin:6px;width:300px;">
+      ${icon} <a href="${fileUrl}" target="_blank" style="text-decoration:none;">${filename}</a>
+    </div>
+  `;
+}
+
+async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
+  if (pageCount.count >= MAX_PAGES || visited.has(url)) return;
+  if (!robots.parser.isAllowed(url, 'fcrawler')) return;
+
+  visited.add(url);
+  pageCount.count++;
+  console.log(`📄 Crawling: ${url}`);
+
+  try {
+    const res = await axios.get(url, { timeout: 10000 });
+    const $ = cheerio.load(res.data, { decodeEntities: false });
+
+    const title = $('title').text().trim() || 'untitled';
+    const filename = title.replace(/[^\w]/g, '_').slice(0, 50) + '.html';
+    const filePath = path.join(crawledDir, filename);
+
+    let docThumbnails = '';
+    $('a[href]').each((_, el) => {
+      const href = $(el).attr('href');
+      if (href && /\.(pdf|zip|docx?|pptx?|rar)$/i.test(href)) {
+        const fullUrl = new URL(href, url).href;
+        docThumbnails += generateDocThumbnail(fullUrl);
+      }
+    });
+
+    $('img').each((_, el) => {
+      const src = $(el).attr('src');
+      if (src) handleImage(src, url);
+    });
+
+    const htmlContent = `
+      <!DOCTYPE html>
+      <html>
+      <head><meta charset="UTF-8"><title>${title}</title></head>
+      <body>
+        ${$('body').html()}
+        <hr/>
+        <h3>📎 Document Thumbnails</h3>
+        ${docThumbnails}
+      </body>
+      </html>`;
+
+    fs.writeFileSync(filePath, htmlContent, 'utf-8');
+    const fileSize = fs.statSync(filePath).size;
+    const fileSizeKB = (fileSize / 1024).toFixed(2);
+    console.log(`📏 File size: ${fileSizeKB} KB`);
+
+    await uploadToMega({ filename, filePath, fileSize, type: 'text' });
+
+    if (docThumbnails) {
+      const thumbFile = path.join(crawledDir, 'thumb_' + filename);
+      fs.writeFileSync(thumbFile, docThumbnails, 'utf-8');
+      const thumbSize = fs.statSync(thumbFile).size;
+      await uploadToMega({ filename: 'thumb_' + filename, filePath: thumbFile, fileSize: thumbSize, type: 'docs' });
+    }
+
+    const entry = {
+      url,
+      title,
+      filename,
+      text: $('body').text().trim().slice(0, 500)
+    };
+
+    let index = [];
+    if (fs.existsSync(indexPath)) index = JSON.parse(fs.readFileSync(indexPath));
+    index.push(entry);
+    fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
+
+    const links = $('a[href]')
+      .map((_, el) => $(el).attr('href'))
+      .get()
+      .map(link => new URL(link, url).href)
+      .filter(href => href.startsWith('http'));
+
+    for (const link of links) {
+      await sleep(crawlDelay);
+      await crawlPage(link, robots, crawlDelay, pageCount);
+    }
+  } catch (err) {
+    console.warn(`❌ Error crawling ${url}: ${err.message}`);
+  }
+}
+
+export async function crawlSite(startUrl) {
+  if (!fs.existsSync(crawledDir)) fs.mkdirSync(crawledDir);
+  const robots = await getRobotsData(startUrl);
+  await crawlPage(startUrl, robots, robots.delay);
+  console.log('✅ Crawl complete.');
+}
