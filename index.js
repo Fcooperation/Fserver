@@ -24,7 +24,7 @@ app.get('/api/search', (req, res) => {
 
 app.listen(PORT, () => {
   console.log(`🚀 Server running on http://localhost:${PORT}/`);
-  const startUrl = 'https://www.google.com/';
+  const startUrl = 'https://books.toscrape.com/';
   console.log(`📄 Crawling: ${startUrl}`);
   crawlSite(startUrl);
 });
