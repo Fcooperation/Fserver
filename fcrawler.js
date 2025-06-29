@@ -16,12 +16,10 @@ const MAX_PAGES = 10;
 const megaEmail = 'thefcooperation@gmail.com';
 const megaPassword = '*Onyedika2009*';
 
-// Helper sleep
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Robots.txt
 async function getRobotsData(url) {
   try {
     const robotsUrl = new URL('/robots.txt', url).href;
@@ -36,7 +34,6 @@ async function getRobotsData(url) {
   }
 }
 
-// Upload if not already in MEGA
 async function uploadToMegaIfNotExists(filename, filePath, fileSize) {
   return new Promise((resolve, reject) => {
     const storage = new Storage({ email: megaEmail, password: megaPassword });
@@ -50,18 +47,30 @@ async function uploadToMegaIfNotExists(filename, filePath, fileSize) {
         return resolve();
       }
 
-      const readStream = fs.createReadStream(filePath);
-      const upload = storage.upload({ name: filename, size: fileSize }, readStream);
+      const uploadWithRetry = async (attempt = 1) => {
+        const readStream = fs.createReadStream(filePath);
+        const upload = storage.upload({ name: filename, size: fileSize }, readStream);
 
-      upload.on('complete', () => {
-        console.log(`📤 Uploaded: ${filename}`);
-        resolve();
-      });
+        upload.on('complete', () => {
+          console.log(`📤 Uploaded: ${filename}`);
+          resolve();
+        });
 
-      upload.on('error', err => {
-        console.error(`❌ Upload error: ${err.message}`);
-        reject(err);
-      });
+        upload.on('error', async (err) => {
+          if (err.message.includes('EAGAIN') && attempt < 5) {
+            const delay = 2000 * attempt;
+            console.warn(`⚠️ Retry ${attempt}/5 after EAGAIN: ${filename} (${delay}ms)`);
+            await sleep(delay);
+            uploadWithRetry(attempt + 1);
+          } else {
+            console.error(`❌ Upload error: ${err.message}`);
+            reject(err);
+          }
+        });
+      };
+
+      await sleep(2000); // Prevent rate-limit hammering
+      uploadWithRetry();
     });
 
     storage.on('error', err => {
@@ -73,47 +82,28 @@ async function uploadToMegaIfNotExists(filename, filePath, fileSize) {
   });
 }
 
-// Save search entry
-function saveSearchEntry(entry) {
-  let index = [];
-  if (fs.existsSync(indexPath)) {
-    index = JSON.parse(fs.readFileSync(indexPath));
-  }
-  index.push(entry);
-  fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
-}
+async function downloadImages($, url, pageFolder) {
+  const images = $('img').map((_, el) => $(el).attr('src')).get();
+  const downloaded = [];
 
-// Image download and upload
-async function handleImages($, baseUrl) {
-  const imageUrls = $('img[src]').map((_, img) => $(img).attr('src')).get();
-  const absoluteUrls = imageUrls.map(src => new URL(src, baseUrl).href);
-
-  for (const imgUrl of absoluteUrls) {
+  for (let src of images) {
+    if (!src) continue;
     try {
-      const imgRes = await axios.get(imgUrl, { responseType: 'arraybuffer', timeout: 10000 });
-      const buffer = Buffer.from(imgRes.data);
-      const imgName = path.basename(new URL(imgUrl).pathname).slice(0, 50) || 'image.jpg';
-      const savePath = path.join(crawledDir, imgName);
-      fs.writeFileSync(savePath, buffer);
+      const imgUrl = new URL(src, url).href;
+      const filename = path.basename(imgUrl).split('?')[0];
+      const savePath = path.join(pageFolder, filename);
 
-      const fileSize = fs.statSync(savePath).size;
-      console.log(`🖼️ Downloaded image: ${imgName} (${(fileSize / 1024).toFixed(2)} KB)`);
-
-      await uploadToMegaIfNotExists(imgName, savePath, fileSize);
-
-      saveSearchEntry({
-        type: 'image',
-        url: imgUrl,
-        filename: imgName,
-        fileSize: `${(fileSize / 1024).toFixed(2)} KB`
-      });
+      const res = await axios.get(imgUrl, { responseType: 'arraybuffer' });
+      fs.writeFileSync(savePath, res.data);
+      downloaded.push(filename);
+      console.log(`🖼️ Downloaded image: ${filename} (${(res.data.length / 1024).toFixed(2)} KB)`);
     } catch (err) {
-      console.warn(`⚠️ Failed to fetch image: ${imgUrl} — ${err.message}`);
+      console.warn(`⚠️ Failed image: ${src}`);
     }
   }
+  return downloaded;
 }
 
-// Crawl a single page
 async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
   if (pageCount.count >= MAX_PAGES || visited.has(url)) return;
   if (!robots.parser.isAllowed(url, 'fcrawler')) return;
@@ -130,27 +120,44 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
     const filename = title.replace(/[^\w]/g, '_').slice(0, 50) + '.html';
     const filePath = path.join(crawledDir, filename);
 
-    const htmlContent = `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="UTF-8">\n<title>${title}</title>\n</head>\n<body>\n${$('body').html()}\n</body>\n</html>`;
+    const pageFolder = crawledDir; // no separate folder for now
+
+    await downloadImages($, url, pageFolder);
+
+    const htmlContent = `<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>${title}</title></head>
+<body>${$('body').html()}</body></html>`;
+
     fs.writeFileSync(filePath, htmlContent, 'utf-8');
 
     const stats = fs.statSync(filePath);
     const fileSize = stats.size;
-    console.log(`📏 File size: ${(fileSize / 1024).toFixed(2)} KB`);
+    const fileSizeKB = (fileSize / 1024).toFixed(2);
+    console.log(`📏 File size: ${fileSizeKB} KB`);
 
-    const sentences = $('body').text().trim().split(/(?<=[.!?])\s+/).filter(s => s.length > 10);
-    for (const sentence of sentences) {
-      saveSearchEntry({
-        type: 'sentence',
-        url,
-        title,
-        filename,
-        text: sentence.slice(0, 500)
-      });
+    const sentences = $('body').text()
+      .replace(/\s+/g, ' ')
+      .split(/(?<=[.!?])\s+/)
+      .map(s => s.trim())
+      .filter(Boolean)
+      .slice(0, 10);
+
+    const entry = {
+      url,
+      title,
+      filename,
+      sentences
+    };
+
+    let index = [];
+    if (fs.existsSync(indexPath)) {
+      index = JSON.parse(fs.readFileSync(indexPath));
     }
+    index.push(entry);
+    fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
 
     await uploadToMegaIfNotExists(filename, filePath, fileSize);
-
-    await handleImages($, url);
 
     const links = $('a[href]')
       .map((_, el) => $(el).attr('href'))
@@ -167,7 +174,6 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
   }
 }
 
-// Final export
 export async function crawlSite(startUrl) {
   if (!fs.existsSync(crawledDir)) fs.mkdirSync(crawledDir);
   const robots = await getRobotsData(startUrl);
