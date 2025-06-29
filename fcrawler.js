@@ -47,30 +47,18 @@ async function uploadToMegaIfNotExists(filename, filePath, fileSize) {
         return resolve();
       }
 
-      const uploadWithRetry = async (attempt = 1) => {
-        const readStream = fs.createReadStream(filePath);
-        const upload = storage.upload({ name: filename, size: fileSize }, readStream);
+      const readStream = fs.createReadStream(filePath);
+      const upload = storage.upload({ name: filename, size: fileSize }, readStream);
 
-        upload.on('complete', () => {
-          console.log(`📤 Uploaded: ${filename}`);
-          resolve();
-        });
+      upload.on('complete', () => {
+        console.log(`📤 Uploaded: ${filename}`);
+        resolve();
+      });
 
-        upload.on('error', async (err) => {
-          if (err.message.includes('EAGAIN') && attempt < 5) {
-            const delay = 2000 * attempt;
-            console.warn(`⚠️ Retry ${attempt}/5 after EAGAIN: ${filename} (${delay}ms)`);
-            await sleep(delay);
-            uploadWithRetry(attempt + 1);
-          } else {
-            console.error(`❌ Upload error: ${err.message}`);
-            reject(err);
-          }
-        });
-      };
-
-      await sleep(2000); // Prevent rate-limit hammering
-      uploadWithRetry();
+      upload.on('error', err => {
+        console.error(`❌ Upload error: ${err.message}`);
+        reject(err);
+      });
     });
 
     storage.on('error', err => {
@@ -80,28 +68,6 @@ async function uploadToMegaIfNotExists(filename, filePath, fileSize) {
 
     storage.login();
   });
-}
-
-async function downloadImages($, url, pageFolder) {
-  const images = $('img').map((_, el) => $(el).attr('src')).get();
-  const downloaded = [];
-
-  for (let src of images) {
-    if (!src) continue;
-    try {
-      const imgUrl = new URL(src, url).href;
-      const filename = path.basename(imgUrl).split('?')[0];
-      const savePath = path.join(pageFolder, filename);
-
-      const res = await axios.get(imgUrl, { responseType: 'arraybuffer' });
-      fs.writeFileSync(savePath, res.data);
-      downloaded.push(filename);
-      console.log(`🖼️ Downloaded image: ${filename} (${(res.data.length / 1024).toFixed(2)} KB)`);
-    } catch (err) {
-      console.warn(`⚠️ Failed image: ${src}`);
-    }
-  }
-  return downloaded;
 }
 
 async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
@@ -120,15 +86,7 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
     const filename = title.replace(/[^\w]/g, '_').slice(0, 50) + '.html';
     const filePath = path.join(crawledDir, filename);
 
-    const pageFolder = crawledDir; // no separate folder for now
-
-    await downloadImages($, url, pageFolder);
-
-    const htmlContent = `<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8"><title>${title}</title></head>
-<body>${$('body').html()}</body></html>`;
-
+    const htmlContent = `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="UTF-8">\n<title>${title}</title>\n</head>\n<body>\n${$('body').html()}\n</body>\n</html>`;
     fs.writeFileSync(filePath, htmlContent, 'utf-8');
 
     const stats = fs.statSync(filePath);
@@ -136,18 +94,11 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
     const fileSizeKB = (fileSize / 1024).toFixed(2);
     console.log(`📏 File size: ${fileSizeKB} KB`);
 
-    const sentences = $('body').text()
-      .replace(/\s+/g, ' ')
-      .split(/(?<=[.!?])\s+/)
-      .map(s => s.trim())
-      .filter(Boolean)
-      .slice(0, 10);
-
     const entry = {
       url,
       title,
       filename,
-      sentences
+      text: $('body').text().trim().slice(0, 500)
     };
 
     let index = [];
@@ -159,6 +110,26 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
 
     await uploadToMegaIfNotExists(filename, filePath, fileSize);
 
+    // 🔁 Download and upload images
+    const imgUrls = $('img').map((_, img) => $(img).attr('src')).get();
+    for (const imgUrl of imgUrls) {
+      try {
+        const absoluteImgUrl = new URL(imgUrl, url).href;
+        const imgRes = await axios.get(absoluteImgUrl, { responseType: 'arraybuffer' });
+        const imgBuffer = Buffer.from(imgRes.data);
+        const imgName = path.basename(new URL(absoluteImgUrl).pathname).split('?')[0];
+
+        const imgPath = path.join(crawledDir, imgName);
+        fs.writeFileSync(imgPath, imgBuffer);
+        console.log(`🖼️ Downloaded image: ${imgName} (${(imgBuffer.length / 1024).toFixed(2)} KB)`);
+
+        await uploadToMegaIfNotExists(imgName, imgPath, imgBuffer.length);
+      } catch (err) {
+        console.warn(`❌ Image error: ${imgUrl} — ${err.message}`);
+      }
+    }
+
+    // ➡️ Follow links
     const links = $('a[href]')
       .map((_, el) => $(el).attr('href'))
       .get()
@@ -169,6 +140,7 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
       await sleep(crawlDelay);
       await crawlPage(link, robots, crawlDelay, pageCount);
     }
+
   } catch (err) {
     console.warn(`❌ Error crawling ${url}: ${err.message}`);
   }
