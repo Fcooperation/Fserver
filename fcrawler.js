@@ -16,12 +16,10 @@ const MAX_PAGES = 10;
 const megaEmail = 'thefcooperation@gmail.com';
 const megaPassword = '*Onyedika2009*';
 
-// Sleep utility
 function sleep(ms) {
   return new Promise(resolve => setTimeout(resolve, ms));
 }
 
-// Get robots.txt data
 async function getRobotsData(url) {
   try {
     const robotsUrl = new URL('/robots.txt', url).href;
@@ -36,7 +34,6 @@ async function getRobotsData(url) {
   }
 }
 
-// Upload to MEGA, passing file size
 async function uploadToMegaIfNotExists(filename, filePath, fileSize) {
   return new Promise((resolve, reject) => {
     const storage = new Storage({ email: megaEmail, password: megaPassword });
@@ -73,7 +70,13 @@ async function uploadToMegaIfNotExists(filename, filePath, fileSize) {
   });
 }
 
-// Crawl and save individual page
+function splitIntoSentences(text) {
+  return text
+    .split(/(?<=[.?!])\s+/)
+    .map(s => s.trim())
+    .filter(Boolean);
+}
+
 async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
   if (pageCount.count >= MAX_PAGES || visited.has(url)) return;
   if (!robots.parser.isAllowed(url, 'fcrawler')) return;
@@ -93,24 +96,26 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
     const htmlContent = `<!DOCTYPE html>\n<html>\n<head>\n<meta charset="UTF-8">\n<title>${title}</title>\n</head>\n<body>\n${$('body').html()}\n</body>\n</html>`;
     fs.writeFileSync(filePath, htmlContent, 'utf-8');
 
-    // 📏 File size check
     const stats = fs.statSync(filePath);
     const fileSize = stats.size;
-    const fileSizeKB = (fileSize / 1024).toFixed(2);
-    console.log(`📏 File size: ${fileSizeKB} KB`);
+    console.log(`📏 File size: ${(fileSize / 1024).toFixed(2)} KB`);
 
-    const entry = {
-      url,
-      title,
-      filename,
-      text: $('body').text().trim().slice(0, 500)
-    };
+    const bodyText = $('body').text().trim();
+    const sentences = splitIntoSentences(bodyText);
 
     let index = [];
     if (fs.existsSync(indexPath)) {
       index = JSON.parse(fs.readFileSync(indexPath));
     }
-    index.push(entry);
+
+    const entries = sentences.map(sentence => ({
+      sentence,
+      url,
+      title,
+      filename
+    }));
+
+    index.push(...entries);
     fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
 
     await uploadToMegaIfNotExists(filename, filePath, fileSize);
@@ -130,7 +135,6 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
   }
 }
 
-// Exported crawlSite
 export async function crawlSite(startUrl) {
   if (!fs.existsSync(crawledDir)) fs.mkdirSync(crawledDir);
   const robots = await getRobotsData(startUrl);
