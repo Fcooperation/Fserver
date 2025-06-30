@@ -13,7 +13,7 @@ app.get('/', (req, res) => {
 });
 
 // ✅ Change this URL to target a different crawlable site
-const startUrl = 'https://file-examples.com/index.php/sample-documents-download/sample-pdf-download/';
+const startUrl = 'https://dspace.mit.edu/handle/1721.1/12192';
 
 app.listen(PORT, async () => {
   console.log(`🚀 Server running on http://localhost:${PORT}/`);
