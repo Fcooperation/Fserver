@@ -19,7 +19,7 @@ const MAX_PAGES = 10;
 const MEGA_ACCOUNTS = {
   text: { email: 'thefcooperation@gmail.com', password: '*Onyedika2009*' },
   images: { email: 'fprojectimages@gmail.com', password: '*Onyedika2009*' },
-  docs: { email: 'fprojectdocuments@gmail.com', password: '*Onyedika2009*' },
+  docs: { email: 'fproject0000009@gmail.com', password: 'Onyedika' },
 };
 
 function sleep(ms) {
