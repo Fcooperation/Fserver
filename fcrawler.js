@@ -111,3 +111,4 @@ async function crawlPage(url) {
   console.log(`📄 Crawling: ${startUrl}`);
   await crawlPage(startUrl);
 })();
+export { crawlSite };
