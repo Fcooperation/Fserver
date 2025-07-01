@@ -1,17 +1,14 @@
-// fcrawler.js
-const fs = require('fs');
-const path = require('path');
-const axios = require('axios');
-const cheerio = require('cheerio');
-const { google } = require('googleapis');
+import axios from 'axios';
+import cheerio from 'cheerio';
+import { google } from 'googleapis';
+import { JWT } from 'google-auth-library';
 
-// GOOGLE DRIVE AUTH SETUP
-const auth = new google.auth.GoogleAuth({
-  credentials: {
-    type: "service_account",
-    project_id: "fvideo-storage",
-    private_key_id: "bfee408f7119fdaa45844420f0e2a1dc2f91523d",
-    private_key: `-----BEGIN PRIVATE KEY-----
+const SCOPES = ['https://www.googleapis.com/auth/drive'];
+const SHARED_FOLDER_ID = '1P5emItPagoPMRUhnp1gfDuCo13ntWawv';
+
+const auth = new JWT({
+  email: 'fprojecttext@fvideo-storage.iam.gserviceaccount.com',
+  key: `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDAG//EzgU79Kfg
 U+0xKway6SKAz+q4EZARPU7geZ5RPdBmOW8J968umMB5YLIV4kArCMt1H0mZgmm8
 a5KuBXislWzGIdiTXpr2JFvsPrKgEDu6L7gP90KXrmLZ3Uo/1SHDE/WSgwUP13EU
@@ -39,76 +36,67 @@ JFB0T9hVvtfFRtVQrkO9iUe2z+Tr0PxkUCQF4Fm/qvnwbLtIJN8OjtfxwRVELif3
 kRKzpPzbwLMpnjeu8Q7krOrUAA878Gj179nuqkLulj0zuPyW3GPLdj50+F1jXOUh
 dccWKCxeR84FyDT0yfBTMgE=
 -----END PRIVATE KEY-----`,
-    client_email: "fprojecttext@fvideo-storage.iam.gserviceaccount.com",
-    client_id: "109374060354568163586",
-    token_uri: "https://oauth2.googleapis.com/token"
-  },
-  scopes: ['https://www.googleapis.com/auth/drive']
+  scopes: SCOPES,
 });
 
 const drive = google.drive({ version: 'v3', auth });
-const folderId = '1P5emItPagoPMRUhnp1gfDuCo13ntWawv'; // Your shared folder ID
 
-// UTILS
-async function uploadToDrive(name, content, mimeType) {
+function sanitizeFilename(url) {
+  return url.replace(/[^a-z0-9]/gi, '_').substring(0, 100) + '.html';
+}
+
+async function uploadToDrive(filename, content) {
   const fileMetadata = {
-    name,
-    parents: [folderId]
+    name: filename,
+    parents: [SHARED_FOLDER_ID],
   };
   const media = {
-    mimeType,
-    body: Buffer.from(content)
+    mimeType: 'text/html',
+    body: Buffer.from(content, 'utf-8'),
   };
+
   try {
     await drive.files.create({
       resource: fileMetadata,
       media,
+      fields: 'id',
       supportsAllDrives: true,
-      fields: 'id'
     });
-    console.log(`📤 Uploaded to Drive: ${name}`);
+    console.log(`📤 Uploaded: ${filename}`);
   } catch (err) {
-    console.error(`❌ Drive upload failed: ${err.message}`);
+    console.error('❌ Drive upload failed:', err.message);
   }
 }
 
-async function crawlPage(url) {
+async function crawlSite(url, visited = new Set()) {
+  if (visited.has(url)) return;
+  visited.add(url);
   try {
     const res = await axios.get(url, { timeout: 10000 });
-    const html = res.data;
-    const $ = cheerio.load(html);
-    let text = '';
-    let images = [];
+    const $ = cheerio.load(res.data);
 
-    $('img').each((i, el) => {
-      const src = $(el).attr('src');
-      if (src) {
-        images.push(src.startsWith('http') ? src : new URL(src, url).href);
-        console.log(`📷 Image detected: ${src}`);
+    const rebuilt = [];
+    $('body').children().each((i, el) => {
+      const tag = $(el).get(0).tagName;
+      if (tag === 'img') {
+        const src = $(el).attr('src');
+        console.log('📷 Image detected:', src);
+      } else if (tag === 'a' && $(el).attr('href')) {
+        const href = new URL($(el).attr('href'), url).href;
+        if (!visited.has(href) && href.startsWith('http')) {
+          crawlSite(href, visited);
+        }
+      } else {
+        rebuilt.push($.html(el));
       }
     });
 
-    $('a[href$=".pdf"], a[href$=".zip"]').each((i, el) => {
-      const link = $(el).attr('href');
-      const fullUrl = link.startsWith('http') ? link : new URL(link, url).href;
-      console.log(`📎 Doc detected (not downloaded): ${fullUrl}`);
-    });
-
-    $('script, style, noscript').remove();
-    text = $('body').text().replace(/\s+/g, ' ').trim();
-
-    const filenameSafe = url.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 100);
-    await uploadToDrive(`${filenameSafe}.html`, html, 'text/html');
-    await uploadToDrive(`${filenameSafe}.txt`, text, 'text/plain');
+    const rebuiltHtml = `<html><body>${rebuilt.join('\n')}</body></html>`;
+    const filename = sanitizeFilename(url);
+    await uploadToDrive(filename, rebuiltHtml);
   } catch (err) {
-    console.error(`❌ Failed to crawl ${url}: ${err.message}`);
+    console.log('⚠️ Error crawling', url, err.message);
   }
 }
 
-// START
-(async () => {
-  const startUrl = 'https://dspace.mit.edu/handle/1721.1/12192'; // Change this to your starting URL
-  console.log(`📄 Crawling: ${startUrl}`);
-  await crawlPage(startUrl);
-})();
 export { crawlSite };
