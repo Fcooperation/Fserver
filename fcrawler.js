@@ -1,24 +1,16 @@
-import fs from 'fs';
-import path from 'path';
-import axios from 'axios';
-import * as cheerio from 'cheerio';
-import { google } from 'googleapis';
-import { fileURLToPath } from 'url';
-import { dirname } from 'path';
+// fcrawler.js
+const fs = require('fs');
+const path = require('path');
+const axios = require('axios');
+const cheerio = require('cheerio');
+const { google } = require('googleapis');
 
-const __dirname = dirname(fileURLToPath(import.meta.url));
-const crawledDir = path.join(__dirname, 'crawled');
-const indexPath = path.join(crawledDir, 'search_index.json');
-const visited = new Set();
-const MAX_PAGES = 10;
-
-// === GOOGLE DRIVE SETUP ===
-const FOLDER_ID = '1P5emItPagoPMRUhnp1gfDuCo13ntWawv';
+// GOOGLE DRIVE AUTH SETUP
 const auth = new google.auth.GoogleAuth({
   credentials: {
-    type: 'service_account',
-    project_id: 'fvideo-storage',
-    private_key_id: 'bfee408f7119fdaa45844420f0e2a1dc2f91523d',
+    type: "service_account",
+    project_id: "fvideo-storage",
+    private_key_id: "bfee408f7119fdaa45844420f0e2a1dc2f91523d",
     private_key: `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDAG//EzgU79Kfg
 U+0xKway6SKAz+q4EZARPU7geZ5RPdBmOW8J968umMB5YLIV4kArCMt1H0mZgmm8
@@ -47,28 +39,32 @@ JFB0T9hVvtfFRtVQrkO9iUe2z+Tr0PxkUCQF4Fm/qvnwbLtIJN8OjtfxwRVELif3
 kRKzpPzbwLMpnjeu8Q7krOrUAA878Gj179nuqkLulj0zuPyW3GPLdj50+F1jXOUh
 dccWKCxeR84FyDT0yfBTMgE=
 -----END PRIVATE KEY-----`,
-    client_email: 'fprojecttext@fvideo-storage.iam.gserviceaccount.com',
-    client_id: '109374060354568163586',
+    client_email: "fprojecttext@fvideo-storage.iam.gserviceaccount.com",
+    client_id: "109374060354568163586",
+    token_uri: "https://oauth2.googleapis.com/token"
   },
-  scopes: ['https://www.googleapis.com/auth/drive'],
+  scopes: ['https://www.googleapis.com/auth/drive']
 });
-const drive = google.drive({ version: 'v3', auth });
 
-// === GOOGLE DRIVE UPLOADER ===
-async function uploadToDrive(name, content) {
+const drive = google.drive({ version: 'v3', auth });
+const folderId = '1P5emItPagoPMRUhnp1gfDuCo13ntWawv'; // Your shared folder ID
+
+// UTILS
+async function uploadToDrive(name, content, mimeType) {
+  const fileMetadata = {
+    name,
+    parents: [folderId]
+  };
+  const media = {
+    mimeType,
+    body: Buffer.from(content)
+  };
   try {
-    const fileMetadata = {
-      name,
-      parents: [FOLDER_ID],
-    };
-    const media = {
-      mimeType: 'text/html',
-      body: content,
-    };
-    const response = await drive.files.create({
-      requestBody: fileMetadata,
+    await drive.files.create({
+      resource: fileMetadata,
       media,
-      fields: 'id',
+      supportsAllDrives: true,
+      fields: 'id'
     });
     console.log(`📤 Uploaded to Drive: ${name}`);
   } catch (err) {
@@ -76,73 +72,42 @@ async function uploadToDrive(name, content) {
   }
 }
 
-async function crawlPage(url, pageCount = { count: 0 }) {
-  if (pageCount.count >= MAX_PAGES || visited.has(url)) return;
-  visited.add(url);
-  pageCount.count++;
-  console.log(`📄 Crawling: ${url}`);
-
+async function crawlPage(url) {
   try {
-    const res = await axios.get(url);
-    const $ = cheerio.load(res.data, { decodeEntities: false });
+    const res = await axios.get(url, { timeout: 10000 });
+    const html = res.data;
+    const $ = cheerio.load(html);
+    let text = '';
+    let images = [];
 
-    const title = $('title').text().trim() || 'untitled';
-    const filename = title.replace(/[^\w]/g, '_').slice(0, 50) + '.html';
-
-    // DETECT IMAGES & DOCS
-    $('img').each((_, el) => {
+    $('img').each((i, el) => {
       const src = $(el).attr('src');
       if (src) {
-        const full = new URL(src, url).href;
-        console.log(`📷 Image detected: ${full}`);
+        images.push(src.startsWith('http') ? src : new URL(src, url).href);
+        console.log(`📷 Image detected: ${src}`);
       }
     });
 
-    $('a[href]').each((_, el) => {
-      const href = $(el).attr('href');
-      if (href && /\.(pdf|docx?|zip|pptx?|mp3)$/i.test(href)) {
-        const full = new URL(href, url).href;
-        console.log(`📎 Document detected: ${full}`);
-      }
+    $('a[href$=".pdf"], a[href$=".zip"]').each((i, el) => {
+      const link = $(el).attr('href');
+      const fullUrl = link.startsWith('http') ? link : new URL(link, url).href;
+      console.log(`📎 Doc detected (not downloaded): ${fullUrl}`);
     });
 
-    const html = `<!DOCTYPE html>
-<html>
-<head><meta charset="UTF-8"><title>${title}</title></head>
-<body>
-${$('body').html()}
-</body>
-</html>`;
+    $('script, style, noscript').remove();
+    text = $('body').text().replace(/\s+/g, ' ').trim();
 
-    await uploadToDrive(filename, html);
-
-    const entry = {
-      url,
-      title,
-      filename,
-      text: $('body').text().trim().slice(0, 500),
-    };
-    if (!fs.existsSync(crawledDir)) fs.mkdirSync(crawledDir);
-    let index = [];
-    if (fs.existsSync(indexPath)) index = JSON.parse(fs.readFileSync(indexPath));
-    index.push(entry);
-    fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
-
-    const links = $('a[href]')
-      .map((_, el) => $(el).attr('href'))
-      .get()
-      .map(link => new URL(link, url).href)
-      .filter(href => href.startsWith('http'));
-
-    for (const link of links) {
-      await crawlPage(link, pageCount);
-    }
+    const filenameSafe = url.replace(/[^a-zA-Z0-9]/g, '_').slice(0, 100);
+    await uploadToDrive(`${filenameSafe}.html`, html, 'text/html');
+    await uploadToDrive(`${filenameSafe}.txt`, text, 'text/plain');
   } catch (err) {
-    console.warn(`❌ Error crawling ${url}: ${err.message}`);
+    console.error(`❌ Failed to crawl ${url}: ${err.message}`);
   }
 }
 
-export async function crawlSite(startUrl) {
+// START
+(async () => {
+  const startUrl = 'https://dspace.mit.edu/handle/1721.1/12192'; // Change this to your starting URL
+  console.log(`📄 Crawling: ${startUrl}`);
   await crawlPage(startUrl);
-  console.log('✅ Crawl complete.');
-}
+})();
