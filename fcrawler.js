@@ -12,12 +12,13 @@ const indexPath = path.join(crawledDir, 'search_index.json');
 const visited = new Set();
 const MAX_PAGES = 10;
 
-// 📂 Google Drive Auth Config
+// === GOOGLE DRIVE SETUP ===
+const FOLDER_ID = '1P5emItPagoPMRUhnp1gfDuCo13ntWawv';
 const auth = new google.auth.GoogleAuth({
   credentials: {
-    type: "service_account",
-    project_id: "fvideo-storage",
-    private_key_id: "bfee408f7119fdaa45844420f0e2a1dc2f91523d",
+    type: 'service_account',
+    project_id: 'fvideo-storage',
+    private_key_id: 'bfee408f7119fdaa45844420f0e2a1dc2f91523d',
     private_key: `-----BEGIN PRIVATE KEY-----
 MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDAG//EzgU79Kfg
 U+0xKway6SKAz+q4EZARPU7geZ5RPdBmOW8J968umMB5YLIV4kArCMt1H0mZgmm8
@@ -46,28 +47,30 @@ JFB0T9hVvtfFRtVQrkO9iUe2z+Tr0PxkUCQF4Fm/qvnwbLtIJN8OjtfxwRVELif3
 kRKzpPzbwLMpnjeu8Q7krOrUAA878Gj179nuqkLulj0zuPyW3GPLdj50+F1jXOUh
 dccWKCxeR84FyDT0yfBTMgE=
 -----END PRIVATE KEY-----`,
-    client_email: "fprojecttext@fvideo-storage.iam.gserviceaccount.com",
-    client_id: "109374060354568163586",
+    client_email: 'fprojecttext@fvideo-storage.iam.gserviceaccount.com',
+    client_id: '109374060354568163586',
   },
-  scopes: ['https://www.googleapis.com/auth/drive.file'],
+  scopes: ['https://www.googleapis.com/auth/drive'],
 });
-
 const drive = google.drive({ version: 'v3', auth });
 
-async function uploadToDrive(filename, filePath) {
-  const fileSize = fs.statSync(filePath).size;
-  const fileMetadata = { name: filename };
-  const media = {
-    mimeType: 'text/html',
-    body: fs.createReadStream(filePath),
-  };
+// === GOOGLE DRIVE UPLOADER ===
+async function uploadToDrive(name, content) {
   try {
-    const res = await drive.files.create({
-      resource: fileMetadata,
+    const fileMetadata = {
+      name,
+      parents: [FOLDER_ID],
+    };
+    const media = {
+      mimeType: 'text/html',
+      body: content,
+    };
+    const response = await drive.files.create({
+      requestBody: fileMetadata,
       media,
       fields: 'id',
     });
-    console.log(`📤 Uploaded to Drive: ${filename} (ID: ${res.data.id})`);
+    console.log(`📤 Uploaded to Drive: ${name}`);
   } catch (err) {
     console.error(`❌ Drive upload failed: ${err.message}`);
   }
@@ -80,30 +83,38 @@ async function crawlPage(url, pageCount = { count: 0 }) {
   console.log(`📄 Crawling: ${url}`);
 
   try {
-    const res = await axios.get(url, { timeout: 10000 });
+    const res = await axios.get(url);
     const $ = cheerio.load(res.data, { decodeEntities: false });
 
     const title = $('title').text().trim() || 'untitled';
     const filename = title.replace(/[^\w]/g, '_').slice(0, 50) + '.html';
-    const filePath = path.join(crawledDir, filename);
 
+    // DETECT IMAGES & DOCS
     $('img').each((_, el) => {
       const src = $(el).attr('src');
       if (src) {
-        const imgUrl = new URL(src, url).href;
-        console.log(`📷 Image detected: ${imgUrl}`);
-        // Don't download or save
+        const full = new URL(src, url).href;
+        console.log(`📷 Image detected: ${full}`);
       }
     });
 
-    const htmlContent = `<!DOCTYPE html>
-    <html>
-    <head><meta charset="UTF-8"><title>${title}</title></head>
-    <body>${$('body').html()}</body>
-    </html>`;
+    $('a[href]').each((_, el) => {
+      const href = $(el).attr('href');
+      if (href && /\.(pdf|docx?|zip|pptx?|mp3)$/i.test(href)) {
+        const full = new URL(href, url).href;
+        console.log(`📎 Document detected: ${full}`);
+      }
+    });
 
-    fs.writeFileSync(filePath, htmlContent, 'utf-8');
-    await uploadToDrive(filename, filePath);
+    const html = `<!DOCTYPE html>
+<html>
+<head><meta charset="UTF-8"><title>${title}</title></head>
+<body>
+${$('body').html()}
+</body>
+</html>`;
+
+    await uploadToDrive(filename, html);
 
     const entry = {
       url,
@@ -111,7 +122,7 @@ async function crawlPage(url, pageCount = { count: 0 }) {
       filename,
       text: $('body').text().trim().slice(0, 500),
     };
-
+    if (!fs.existsSync(crawledDir)) fs.mkdirSync(crawledDir);
     let index = [];
     if (fs.existsSync(indexPath)) index = JSON.parse(fs.readFileSync(indexPath));
     index.push(entry);
@@ -132,7 +143,6 @@ async function crawlPage(url, pageCount = { count: 0 }) {
 }
 
 export async function crawlSite(startUrl) {
-  if (!fs.existsSync(crawledDir)) fs.mkdirSync(crawledDir);
   await crawlPage(startUrl);
   console.log('✅ Crawl complete.');
 }
