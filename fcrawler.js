@@ -2,116 +2,121 @@ import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
-import robotsParser from 'robots-parser';
 import { google } from 'googleapis';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const CRAWLED_DIR = path.join(__dirname, 'crawled');
-const INDEX_PATH = path.join(CRAWLED_DIR, 'search_index.json');
-const MAX_PAGES = 10;
+const crawledDir = path.join(__dirname, 'crawled');
+const indexPath = path.join(crawledDir, 'search_index.json');
 const visited = new Set();
+const MAX_PAGES = 10;
 
-const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
+// 📂 Google Drive Auth Config
 const auth = new google.auth.GoogleAuth({
-  keyFile: './client_secret_942532537890-pieivl8jq3ublsvnsm6tk2se89bahtc5.apps.googleusercontent.com.json',
-  scopes: SCOPES
+  credentials: {
+    type: "service_account",
+    project_id: "fvideo-storage",
+    private_key_id: "bfee408f7119fdaa45844420f0e2a1dc2f91523d",
+    private_key: `-----BEGIN PRIVATE KEY-----
+MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQDAG//EzgU79Kfg
+U+0xKway6SKAz+q4EZARPU7geZ5RPdBmOW8J968umMB5YLIV4kArCMt1H0mZgmm8
+a5KuBXislWzGIdiTXpr2JFvsPrKgEDu6L7gP90KXrmLZ3Uo/1SHDE/WSgwUP13EU
+ro7V2XVytZfAsTJn0rTui6louOecHIrBVqXXncH89AbLYwtDEHLfF0LGHShiWG7W
+AgLJj10+wThROHBH8GaEnSNnpfo5pJ9f+txVc45Zf76XNZX+G+d53XZUMvcFuzBH
+34iPvcDbFzFrJW5nchu6aSZHPvcSzUT1nzc8/S3JxdvKGi07Dd2lHbM7C8sH5TVP
+OI6cSfxRAgMBAAECggEAEmBbRfsjGwobKOU+Ui64dFLCvymkXTko281Oh0B6+XB9
+R9oEmiJ8OmvYNYQfZOKAmt07gReeFbYY4TI1FLpnQbMFdap1KhupnRP7SwzwT0le
+PUAlTjmrwBCpWgfF+3cqxJtbKUmpKUvFgGH2PdSQXImsW31XwgCw2AS6Ds9pMFCM
+LDsocqhsndtUdVZxwxxyHZ5GYURNWgQ7NoiU2GymStq/R71LTzyoFMAyw4md4aBH
+1FjTfMkxuFnVVuv6qtWTfWuVkHAromdOCzRsSnOpDCUVagkwZMJAVEHpbZhJ9uoQ
+lwipmjcjh0hTbqKWTnREsMJ7w1AC+/QVdTXab/405QKBgQDmUdG1BdR4MZnEgHk7
+3YdMjmWzfZtvRJ6YXFgx4JMZdOm02iSHy7Ep9dgVvce6iW6hLhTyRyglLtR/18Fg
+38sLsuDuGRbGNyYobB86aXRahdLDxXJlX81eDDylOZ3895m3piI5nOJ/hI3fHj2w
+cnnvJ+XKO9YPP7xl9lUUpYezkwKBgQDVh4RsRhePNC4vJ3jFvJbcezqF81YLWLW+
+rXOchHfYffea4pM7e6LICU6G1ZZ7qpGmngEzC5zGqJWId3KCWL31bB+m0OgprZbZ
+nISqKGmEZW7VfOuoNc1zYRDe/vCAnHyLwTSvbgJaYFbzxU0deI6TgXVOUaqs4NJN
+hJxvuGrHCwKBgDkoROqvr7LEXGyvlWaN623MSODqYxCR7unQwPJf0SGYKgd/u2EX
+47eOEzoSBub8BEBrtzcJAaV4obO4T31DDJiyo69y+nvmY8nUS0urr/xnCY8cCO+v
+fr/AOaynR9XnfHZe/E9f57XNp4efcZ/ASRJYzGYLw2u1XYPQRf0Bt1ORAoGAIXbm
+ow1tHc1gu5UlEWBYCF/rsRiM0KRrf2Gxr8L3AV/kkUqXJohe35jNzMXmmqUFxKYY
+rAZS4LOFE+kcch80TiVO5Jby+60v6hTkmcJRnyVCdITqbedYto9s1HYB/TYJMuHp
+vuCvz7gviG7QgiDlv2pXlxmndQabDvkMh1nQqjcCgYEAnT9ZV15sXwZEVL8k7zUL
+JFB0T9hVvtfFRtVQrkO9iUe2z+Tr0PxkUCQF4Fm/qvnwbLtIJN8OjtfxwRVELif3
+kRKzpPzbwLMpnjeu8Q7krOrUAA878Gj179nuqkLulj0zuPyW3GPLdj50+F1jXOUh
+dccWKCxeR84FyDT0yfBTMgE=
+-----END PRIVATE KEY-----`,
+    client_email: "fprojecttext@fvideo-storage.iam.gserviceaccount.com",
+    client_id: "109374060354568163586",
+  },
+  scopes: ['https://www.googleapis.com/auth/drive.file'],
 });
+
 const drive = google.drive({ version: 'v3', auth });
 
-function sleep(ms) {
-  return new Promise(res => setTimeout(res, ms));
-}
-
-async function getRobotsData(url) {
+async function uploadToDrive(filename, filePath) {
+  const fileSize = fs.statSync(filePath).size;
+  const fileMetadata = { name: filename };
+  const media = {
+    mimeType: 'text/html',
+    body: fs.createReadStream(filePath),
+  };
   try {
-    const robotsUrl = new URL('/robots.txt', url).href;
-    const res = await axios.get(robotsUrl);
-    const robots = robotsParser(robotsUrl, res.data);
-    return {
-      parser: robots,
-      delay: robots.getCrawlDelay('fcrawler') || 2000
-    };
-  } catch {
-    return { parser: { isAllowed: () => true }, delay: 2000 };
-  }
-}
-
-async function uploadToDrive({ name, mimeType, body }) {
-  try {
-    const file = await drive.files.create({
-      requestBody: { name, mimeType },
-      media: { mimeType, body }
+    const res = await drive.files.create({
+      resource: fileMetadata,
+      media,
+      fields: 'id',
     });
-    console.log(`📤 Uploaded to Drive: ${name}`);
-    return file.data.id;
+    console.log(`📤 Uploaded to Drive: ${filename} (ID: ${res.data.id})`);
   } catch (err) {
     console.error(`❌ Drive upload failed: ${err.message}`);
   }
 }
 
-async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
+async function crawlPage(url, pageCount = { count: 0 }) {
   if (pageCount.count >= MAX_PAGES || visited.has(url)) return;
-  if (!robots.parser.isAllowed(url, 'fcrawler')) return;
-
   visited.add(url);
   pageCount.count++;
   console.log(`📄 Crawling: ${url}`);
 
   try {
-    const res = await axios.get(url, { timeout: 15000 });
+    const res = await axios.get(url, { timeout: 10000 });
     const $ = cheerio.load(res.data, { decodeEntities: false });
 
     const title = $('title').text().trim() || 'untitled';
-    const safeTitle = title.replace(/[^\w]/g, '_').slice(0, 50);
-    const fullHtml = `
-      <!DOCTYPE html>
-      <html><head><meta charset="UTF-8"><title>${title}</title></head>
-      <body>${$('body').html()}</body></html>
-    `;
+    const filename = title.replace(/[^\w]/g, '_').slice(0, 50) + '.html';
+    const filePath = path.join(crawledDir, filename);
 
-    const pageText = $('body').text().trim().slice(0, 800);
-
-    // Upload full rebuilt HTML
-    await uploadToDrive({
-      name: `${safeTitle}.html`,
-      mimeType: 'text/html',
-      body: fullHtml
-    });
-
-    // Upload plain text
-    await uploadToDrive({
-      name: `${safeTitle}.txt`,
-      mimeType: 'text/plain',
-      body: pageText
-    });
-
-    // Save to local search index
-    const entry = { url, title, text: pageText };
-    let index = [];
-    if (fs.existsSync(INDEX_PATH)) index = JSON.parse(fs.readFileSync(INDEX_PATH));
-    index.push(entry);
-    fs.writeFileSync(INDEX_PATH, JSON.stringify(index, null, 2));
-
-    // Detect image/doc links only (but don’t download/upload)
     $('img').each((_, el) => {
       const src = $(el).attr('src');
       if (src) {
-        const fullUrl = new URL(src, url).href;
-        console.log(`📷 Image detected: ${fullUrl}`);
+        const imgUrl = new URL(src, url).href;
+        console.log(`📷 Image detected: ${imgUrl}`);
+        // Don't download or save
       }
     });
 
-    $('a[href]').each((_, el) => {
-      const href = $(el).attr('href');
-      if (href && /\.(pdf|zip|docx?|pptx?|rar)$/i.test(href)) {
-        const fullUrl = new URL(href, url).href;
-        console.log(`📄 Doc link detected: ${fullUrl}`);
-      }
-    });
+    const htmlContent = `<!DOCTYPE html>
+    <html>
+    <head><meta charset="UTF-8"><title>${title}</title></head>
+    <body>${$('body').html()}</body>
+    </html>`;
 
-    // Crawl next links
+    fs.writeFileSync(filePath, htmlContent, 'utf-8');
+    await uploadToDrive(filename, filePath);
+
+    const entry = {
+      url,
+      title,
+      filename,
+      text: $('body').text().trim().slice(0, 500),
+    };
+
+    let index = [];
+    if (fs.existsSync(indexPath)) index = JSON.parse(fs.readFileSync(indexPath));
+    index.push(entry);
+    fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
+
     const links = $('a[href]')
       .map((_, el) => $(el).attr('href'))
       .get()
@@ -119,18 +124,15 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
       .filter(href => href.startsWith('http'));
 
     for (const link of links) {
-      await sleep(crawlDelay);
-      await crawlPage(link, robots, crawlDelay, pageCount);
+      await crawlPage(link, pageCount);
     }
-
   } catch (err) {
     console.warn(`❌ Error crawling ${url}: ${err.message}`);
   }
 }
 
 export async function crawlSite(startUrl) {
-  if (!fs.existsSync(CRAWLED_DIR)) fs.mkdirSync(CRAWLED_DIR);
-  const robots = await getRobotsData(startUrl);
-  await crawlPage(startUrl, robots, robots.delay);
+  if (!fs.existsSync(crawledDir)) fs.mkdirSync(crawledDir);
+  await crawlPage(startUrl);
   console.log('✅ Crawl complete.');
 }
