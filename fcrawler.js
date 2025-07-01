@@ -1,5 +1,5 @@
 import axios from 'axios';
-import cheerio from 'cheerio';
+import * as cheerio from 'cheerio';
 import { google } from 'googleapis';
 import { JWT } from 'google-auth-library';
 
@@ -80,7 +80,7 @@ async function crawlSite(url, visited = new Set()) {
       const tag = $(el).get(0).tagName;
       if (tag === 'img') {
         const src = $(el).attr('src');
-        console.log('📷 Image detected:', src);
+        if (src) console.log('📷 Image detected:', src);
       } else if (tag === 'a' && $(el).attr('href')) {
         const href = new URL($(el).attr('href'), url).href;
         if (!visited.has(href) && href.startsWith('http')) {
