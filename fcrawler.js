@@ -1,32 +1,29 @@
-// ✅ Full Fcrawler with block-format crawling, MEGA upload, thumbnails
-
 import fs from 'fs';
 import path from 'path';
 import axios from 'axios';
 import * as cheerio from 'cheerio';
 import robotsParser from 'robots-parser';
+import { google } from 'googleapis';
 import { fileURLToPath } from 'url';
 import { dirname } from 'path';
-import { Storage } from 'megajs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const crawledDir = path.join(__dirname, 'crawled');
-const indexPath = path.join(crawledDir, 'search_index.json');
-const visited = new Set();
+const CRAWLED_DIR = path.join(__dirname, 'crawled');
+const INDEX_PATH = path.join(CRAWLED_DIR, 'search_index.json');
 const MAX_PAGES = 10;
+const visited = new Set();
 
-// 🔐 MEGA logins by content type
-const MEGA_ACCOUNTS = {
-  text: { email: 'thefcooperation@gmail.com', password: '*Onyedika2009*' },
-  images: { email: 'fprojectimages@gmail.com', password: '*Onyedika2009*' },
-  docs: { email: 'fproject0000009@gmail.com', password: 'Onyedika' },
-};
+const SCOPES = ['https://www.googleapis.com/auth/drive.file'];
+const auth = new google.auth.GoogleAuth({
+  keyFile: './client_secret_942532537890-pieivl8jq3ublsvnsm6tk2se89bahtc5.apps.googleusercontent.com.json',
+  scopes: SCOPES
+});
+const drive = google.drive({ version: 'v3', auth });
 
 function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
+  return new Promise(res => setTimeout(res, ms));
 }
 
-// 🧠 Respect robots.txt
 async function getRobotsData(url) {
   try {
     const robotsUrl = new URL('/robots.txt', url).href;
@@ -34,82 +31,26 @@ async function getRobotsData(url) {
     const robots = robotsParser(robotsUrl, res.data);
     return {
       parser: robots,
-      delay: robots.getCrawlDelay('fcrawler') || 2000,
+      delay: robots.getCrawlDelay('fcrawler') || 2000
     };
   } catch {
     return { parser: { isAllowed: () => true }, delay: 2000 };
   }
 }
 
-// ☁️ Upload file to correct MEGA account
-async function uploadToMega({ filename, filePath, fileSize, type }) {
-  const { email, password } = MEGA_ACCOUNTS[type];
-  return new Promise((resolve, reject) => {
-    const storage = new Storage({ email, password });
-
-    storage.on('ready', () => {
-      const exists = Object.values(storage.files).some(f => f.name === filename);
-      if (exists) {
-        console.log(`⏩ Skipped (already exists): ${filename}`);
-        return resolve();
-      }
-
-      const stream = fs.createReadStream(filePath);
-      const upload = storage.upload({ name: filename, size: fileSize }, stream);
-
-      upload.on('complete', () => {
-        console.log(`📤 Uploaded: ${filename}`);
-        resolve();
-      });
-
-      upload.on('error', err => {
-        console.error(`❌ Upload error: ${err.message}`);
-        reject(err);
-      });
-    });
-
-    storage.on('error', err => {
-      console.error(`❌ MEGA login failed: ${err.message}`);
-      reject(err);
-    });
-
-    storage.login();
-  });
-}
-
-// 🖼️ Download and upload image
-async function handleImage(src, baseUrl) {
+async function uploadToDrive({ name, mimeType, body }) {
   try {
-    const url = new URL(src, baseUrl).href;
-    const response = await axios.get(url, { responseType: 'arraybuffer' });
-    const buffer = Buffer.from(response.data);
-    const filename = path.basename(url.split('?')[0]);
-    const filePath = path.join(crawledDir, filename);
-
-    fs.writeFileSync(filePath, buffer);
-    const fileSize = fs.statSync(filePath).size;
-
-    console.log(`🖼️ Downloaded image: ${filename}`);
-    await uploadToMega({ filename, filePath, fileSize, type: 'images' });
-  } catch {
-    console.warn(`⚠️ Image failed: ${src}`);
+    const file = await drive.files.create({
+      requestBody: { name, mimeType },
+      media: { mimeType, body }
+    });
+    console.log(`📤 Uploaded to Drive: ${name}`);
+    return file.data.id;
+  } catch (err) {
+    console.error(`❌ Drive upload failed: ${err.message}`);
   }
 }
 
-// 🧱 Generate HTML block thumbnail for docs
-function generateDocThumbnail(fileUrl) {
-  const filename = path.basename(fileUrl.split('?')[0]);
-  const ext = filename.split('.').pop().toLowerCase();
-  const icon = ext === 'pdf' ? '📄' : ext === 'zip' ? '🗜️' : '📁';
-
-  return `
-    <div style="border:1px solid #ccc;padding:8px;margin:6px;width:300px;">
-      ${icon} <a href="${fileUrl}" target="_blank" style="text-decoration:none;">${filename}</a>
-    </div>
-  `;
-}
-
-// 🌐 Crawl a single page in block format
 async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
   if (pageCount.count >= MAX_PAGES || visited.has(url)) return;
   if (!robots.parser.isAllowed(url, 'fcrawler')) return;
@@ -119,92 +60,76 @@ async function crawlPage(url, robots, crawlDelay, pageCount = { count: 0 }) {
   console.log(`📄 Crawling: ${url}`);
 
   try {
-    const res = await axios.get(url, { timeout: 10000 });
+    const res = await axios.get(url, { timeout: 15000 });
     const $ = cheerio.load(res.data, { decodeEntities: false });
 
     const title = $('title').text().trim() || 'untitled';
-    const filename = title.replace(/[^\w]/g, '_').slice(0, 50) + '.html';
-    const filePath = path.join(crawledDir, filename);
+    const safeTitle = title.replace(/[^\w]/g, '_').slice(0, 50);
+    const fullHtml = `
+      <!DOCTYPE html>
+      <html><head><meta charset="UTF-8"><title>${title}</title></head>
+      <body>${$('body').html()}</body></html>
+    `;
 
-    let docThumbnails = '';
-    const docLinks = [];
+    const pageText = $('body').text().trim().slice(0, 800);
+
+    // Upload full rebuilt HTML
+    await uploadToDrive({
+      name: `${safeTitle}.html`,
+      mimeType: 'text/html',
+      body: fullHtml
+    });
+
+    // Upload plain text
+    await uploadToDrive({
+      name: `${safeTitle}.txt`,
+      mimeType: 'text/plain',
+      body: pageText
+    });
+
+    // Save to local search index
+    const entry = { url, title, text: pageText };
+    let index = [];
+    if (fs.existsSync(INDEX_PATH)) index = JSON.parse(fs.readFileSync(INDEX_PATH));
+    index.push(entry);
+    fs.writeFileSync(INDEX_PATH, JSON.stringify(index, null, 2));
+
+    // Detect image/doc links only (but don’t download/upload)
+    $('img').each((_, el) => {
+      const src = $(el).attr('src');
+      if (src) {
+        const fullUrl = new URL(src, url).href;
+        console.log(`📷 Image detected: ${fullUrl}`);
+      }
+    });
 
     $('a[href]').each((_, el) => {
       const href = $(el).attr('href');
       if (href && /\.(pdf|zip|docx?|pptx?|rar)$/i.test(href)) {
         const fullUrl = new URL(href, url).href;
-        docThumbnails += generateDocThumbnail(fullUrl);
-        docLinks.push(fullUrl);
+        console.log(`📄 Doc link detected: ${fullUrl}`);
       }
     });
 
-    $('img').each((_, el) => {
-      const src = $(el).attr('src');
-      if (src) handleImage(src, url);
-    });
-
-    const htmlContent = `
-      <!DOCTYPE html>
-      <html>
-      <head><meta charset="UTF-8"><title>${title}</title></head>
-      <body>
-        ${$('body').html()}
-        <hr/>
-        <h3>📎 Document Thumbnails</h3>
-        ${docThumbnails}
-      </body>
-      </html>`;
-
-    fs.writeFileSync(filePath, htmlContent, 'utf-8');
-    const fileSize = fs.statSync(filePath).size;
-    const fileSizeKB = (fileSize / 1024).toFixed(2);
-    console.log(`📏 File size: ${fileSizeKB} KB`);
-
-    await uploadToMega({ filename, filePath, fileSize, type: 'text' });
-
-    if (docThumbnails) {
-      const thumbFile = path.join(crawledDir, 'thumb_' + filename);
-      fs.writeFileSync(thumbFile, docThumbnails, 'utf-8');
-      const thumbSize = fs.statSync(thumbFile).size;
-      await uploadToMega({ filename: 'thumb_' + filename, filePath: thumbFile, fileSize: thumbSize, type: 'docs' });
-    }
-
-    const entry = {
-      url,
-      title,
-      filename,
-      text: $('body').text().trim().slice(0, 500)
-    };
-
-    let index = [];
-    if (fs.existsSync(indexPath)) index = JSON.parse(fs.readFileSync(indexPath));
-    index.push(entry);
-    fs.writeFileSync(indexPath, JSON.stringify(index, null, 2));
-
+    // Crawl next links
     const links = $('a[href]')
       .map((_, el) => $(el).attr('href'))
       .get()
-      .map(link => {
-        try {
-          return new URL(link, url).href;
-        } catch {
-          return null;
-        }
-      })
-      .filter(href => href && href.startsWith('http'));
+      .map(link => new URL(link, url).href)
+      .filter(href => href.startsWith('http'));
 
     for (const link of links) {
       await sleep(crawlDelay);
       await crawlPage(link, robots, crawlDelay, pageCount);
     }
+
   } catch (err) {
     console.warn(`❌ Error crawling ${url}: ${err.message}`);
   }
 }
 
-// 🚀 Entry point
 export async function crawlSite(startUrl) {
-  if (!fs.existsSync(crawledDir)) fs.mkdirSync(crawledDir);
+  if (!fs.existsSync(CRAWLED_DIR)) fs.mkdirSync(CRAWLED_DIR);
   const robots = await getRobotsData(startUrl);
   await crawlPage(startUrl, robots, robots.delay);
   console.log('✅ Crawl complete.');
