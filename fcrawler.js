@@ -5,13 +5,13 @@ import path from 'path';
 import mime from 'mime-types';
 import { fileURLToPath } from 'url';
 import http from 'http';
-import { parse } from 'node-html-parser';
 import sanitize from 'sanitize-filename';
+import FormData from 'form-data';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// pCloud login (hardcoded)
+// pCloud login
 const PCLOUD_EMAIL = 'thefcooperation@gmail.com';
 const PCLOUD_PASSWORD = 'Onyedika';
 
@@ -26,9 +26,11 @@ async function loginToPCloud() {
       password: PCLOUD_PASSWORD
     }
   });
+
   if (res.data.result !== 0) {
     throw new Error('❌ Failed to log into pCloud: ' + res.data.error);
   }
+
   accessToken = res.data.auth;
   console.log('✅ Logged into pCloud.');
 }
@@ -71,6 +73,9 @@ async function uploadToPCloud(filePath, folderId) {
     return;
   }
 
+  const sizeMB = (await fs.stat(filePath)).size / (1024 * 1024);
+  console.log(`📦 Preparing to upload: ${filename} (${sizeMB.toFixed(2)} MB)`);
+
   const formData = new FormData();
   formData.append('auth', accessToken);
   formData.append('folderid', folderId);
@@ -80,7 +85,11 @@ async function uploadToPCloud(filePath, folderId) {
     headers: formData.getHeaders()
   });
 
-  console.log('✅ Uploaded to pCloud:', filename);
+  if (res.data.result === 0) {
+    console.log('✅ Uploaded to pCloud:', filename);
+  } else {
+    console.error('❌ Upload failed:', res.data);
+  }
 }
 
 function rebuildHtml($, url) {
@@ -99,32 +108,42 @@ function rebuildHtml($, url) {
 
 async function crawlPage(url, siteFolderId) {
   try {
-    const robotsTxt = await axios.get(new URL('/robots.txt', url).href);
-    if (robotsTxt.data.includes('Disallow: /')) {
-      console.log('⚠️ Robots.txt disallows crawling:', url);
+    if (url.includes('login') || url.includes('signup')) {
+      console.log('🚫 Skipping login/signup page:', url);
       return;
     }
-  } catch (e) {}
 
-  const res = await axios.get(url, { timeout: 10000 });
-  const $ = cheerio.load(res.data);
+    // robots.txt check
+    try {
+      const robotsTxt = await axios.get(new URL('/robots.txt', url).href);
+      if (robotsTxt.data.includes('Disallow: /')) {
+        console.log('⚠️ robots.txt disallows:', url);
+        return;
+      }
+    } catch (e) {
+      console.log('⚠️ No robots.txt found, continuing...');
+    }
 
-  const html = rebuildHtml($, url);
-  const filename = sanitize(url).replace(/[:\/?=&]/g, '_') + '.html';
-  const localPath = path.join(__dirname, 'temp', filename);
-  await fs.outputFile(localPath, html);
-  uploadQueue.push({ path: localPath, folderId: siteFolderId });
+    const res = await axios.get(url, { timeout: 10000 });
+    const $ = cheerio.load(res.data);
 
-  const text = $('body').text().replace(/\s+/g, ' ').trim();
-  const sentences = text.split(/[.!?]/).filter(Boolean).map(s => s.trim()).slice(0, 30);
-  const txtName = filename.replace('.html', '_sentences.txt');
-  const txtPath = path.join(__dirname, 'temp', txtName);
-  await fs.outputFile(txtPath, sentences.join('\n'));
-  uploadQueue.push({ path: txtPath, folderId: siteFolderId });
+    const html = rebuildHtml($, url);
+    const filename = sanitize(url).replace(/[:\/?=&]/g, '_') + '.html';
+    const localPath = path.join(__dirname, 'temp', filename);
+    await fs.outputFile(localPath, html);
+    uploadQueue.push({ path: localPath, folderId: siteFolderId });
 
-  console.log('📄 Crawled:', url);
-} catch (err) {
-  console.error('❌ Error crawling', url, err.message);
+    const text = $('body').text().replace(/\s+/g, ' ').trim();
+    const sentences = text.split(/[.!?]/).filter(Boolean).map(s => s.trim()).slice(0, 30);
+    const txtName = filename.replace('.html', '_sentences.txt');
+    const txtPath = path.join(__dirname, 'temp', txtName);
+    await fs.outputFile(txtPath, sentences.join('\n'));
+    uploadQueue.push({ path: txtPath, folderId: siteFolderId });
+
+    console.log('📄 Crawled:', url);
+  } catch (err) {
+    console.error('❌ Error crawling', url, err.message);
+  }
 }
 
 async function uploadWorker() {
@@ -138,7 +157,7 @@ async function uploadWorker() {
         console.error('❌ Upload failed:', e.message);
       }
     }
-    await new Promise(res => setTimeout(res, 60000)); // 60 sec
+    await new Promise(res => setTimeout(res, 60000)); // Every 60 seconds
   }
 }
 
@@ -161,6 +180,6 @@ http.createServer((req, res) => {
   console.log('🚀 Server running on http://localhost:10000/');
 });
 
-// Start
+// Start the engine
 await loginToPCloud();
-uploadWorker(); // keep uploading every 60 sec
+uploadWorker();
