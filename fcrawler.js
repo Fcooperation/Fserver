@@ -1,125 +1,166 @@
 import axios from 'axios';
-import * as cheerio from 'cheerio';
-import robotsParser from 'robots-parser';
-import FormData from 'form-data';
-import fs from 'fs';
+import cheerio from 'cheerio';
+import fs from 'fs-extra';
 import path from 'path';
+import mime from 'mime-types';
 import { fileURLToPath } from 'url';
-import { mkdirSync, writeFileSync, unlinkSync } from 'fs';
+import http from 'http';
+import { parse } from 'node-html-parser';
+import sanitize from 'sanitize-filename';
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-// 🔐 pCloud login credentials
-const PCLOUD_USER = 'thefcooperation@gmail.com';
-const PCLOUD_PASS = 'Onyedika';
+// pCloud login (hardcoded)
+const PCLOUD_EMAIL = 'thefcooperation@gmail.com';
+const PCLOUD_PASSWORD = 'Onyedika';
 
-let authToken = null;
+let accessToken = '';
+const uploadQueue = [];
 
 async function loginToPCloud() {
   const res = await axios.get('https://api.pcloud.com/login', {
     params: {
       getauth: 1,
-      username: PCLOUD_USER,
-      password: PCLOUD_PASS
+      username: PCLOUD_EMAIL,
+      password: PCLOUD_PASSWORD
     }
   });
-
-  if (res.data.result === 0) {
-    authToken = res.data.auth;
-    console.log('✅ Logged into pCloud');
-  } else {
+  if (res.data.result !== 0) {
     throw new Error('❌ Failed to log into pCloud: ' + res.data.error);
   }
+  accessToken = res.data.auth;
+  console.log('✅ Logged into pCloud.');
 }
 
-async function obeyRobotsTxt(url) {
-  const base = new URL(url).origin;
-  try {
-    const res = await axios.get(`${base}/robots.txt`);
-    const parser = robotsParser(`${base}/robots.txt`, res.data);
-    const isAllowed = parser.isAllowed(url, '*');
-    const delay = parser.getCrawlDelay('*') || 1;
-    return { isAllowed, delay };
-  } catch {
-    return { isAllowed: true, delay: 1 };
-  }
-}
-
-async function uploadToPCloud(filePath, remoteName) {
-  const form = new FormData();
-  form.append('auth', authToken);
-  form.append('filename', fs.createReadStream(filePath));
-  form.append('folderid', 0); // Root folder
-
-  try {
-    const res = await axios.post('https://api.pcloud.com/uploadfile', form, {
-      headers: form.getHeaders(),
-      maxContentLength: Infinity,
-      maxBodyLength: Infinity
-    });
-    console.log(`📤 Uploaded to pCloud: ${remoteName}`);
-  } catch (err) {
-    console.log(`❌ Upload failed: ${remoteName}`);
-  }
-}
-
-async function savePageAsHTML(url, $) {
-  const pageTitle = $('title').text().replace(/[\\/:*?"<>|]/g, '_').slice(0, 50);
-  const fileName = `${pageTitle || 'page'}.html`;
-  const folderPath = path.join(__dirname, 'output');
-  mkdirSync(folderPath, { recursive: true });
-
-  const content = $.html();
-  const filePath = path.join(folderPath, fileName);
-  writeFileSync(filePath, content, 'utf8');
-  return filePath;
-}
-
-async function crawlSite(startUrl) {
-  await loginToPCloud();
-
-  const visited = new Set();
-  const queue = [startUrl];
-  let pageCount = 0;
-
-  while (queue.length && pageCount < 10) {
-    const url = queue.shift();
-    if (visited.has(url)) continue;
-
-    const { isAllowed, delay } = await obeyRobotsTxt(url);
-    if (!isAllowed) {
-      console.log(`⛔ Blocked by robots.txt: ${url}`);
-      continue;
+async function getFolderId(folderName, parentFolderId = 0) {
+  const res = await axios.get('https://api.pcloud.com/listfolder', {
+    params: {
+      auth: accessToken,
+      folderid: parentFolderId
     }
+  });
+  const folder = res.data.metadata.contents?.find(f => f.name === folderName && f.isfolder);
+  if (folder) return folder.folderid;
 
-    try {
-      console.log(`📄 Crawling: ${url}`);
-      const res = await axios.get(url);
-      const $ = cheerio.load(res.data);
-
-      const filePath = await savePageAsHTML(url, $);
-      await uploadToPCloud(filePath, path.basename(filePath));
-      unlinkSync(filePath);
-
-      // Extract links for future crawl
-      $('a[href]').each((_, el) => {
-        const href = $(el).attr('href');
-        if (href && !href.startsWith('#')) {
-          try {
-            const absUrl = new URL(href, url).href;
-            if (!visited.has(absUrl)) queue.push(absUrl);
-          } catch {}
-        }
-      });
-
-      visited.add(url);
-      pageCount++;
-      await new Promise(r => setTimeout(r, delay * 1000));
-    } catch (err) {
-      console.log(`❌ Error crawling ${url}:`, err.message);
+  const createRes = await axios.get('https://api.pcloud.com/createfolder', {
+    params: {
+      auth: accessToken,
+      name: folderName,
+      folderid: parentFolderId
     }
+  });
+  return createRes.data.metadata.folderid;
+}
+
+async function fileExistsInPCloud(folderId, filename) {
+  const res = await axios.get('https://api.pcloud.com/listfolder', {
+    params: {
+      auth: accessToken,
+      folderid: folderId
+    }
+  });
+  return res.data.metadata.contents?.some(f => f.name === filename) ?? false;
+}
+
+async function uploadToPCloud(filePath, folderId) {
+  const filename = path.basename(filePath);
+  const exists = await fileExistsInPCloud(folderId, filename);
+  if (exists) {
+    console.log('⏭️ Skipping already uploaded:', filename);
+    return;
   }
 
-  console.log('✅ Crawling complete.');
+  const formData = new FormData();
+  formData.append('auth', accessToken);
+  formData.append('folderid', folderId);
+  formData.append('filename', fs.createReadStream(filePath));
+
+  const res = await axios.post('https://api.pcloud.com/uploadfile', formData, {
+    headers: formData.getHeaders()
+  });
+
+  console.log('✅ Uploaded to pCloud:', filename);
 }
-export { crawlSite };
+
+function rebuildHtml($, url) {
+  $('a').each((_, el) => {
+    const href = $(el).attr('href');
+    if (!href || href.startsWith('#')) return;
+
+    const fullHref = href.startsWith('http') ? href : new URL(href, url).href;
+    const sanitizedLocal = sanitize(fullHref).replace(/[:\/?=&]/g, '_') + '.html';
+
+    $(el).attr('href', `/fweb/${sanitizedLocal}`);
+    $(el).attr('data-fallback', fullHref);
+  });
+  return $.html();
+}
+
+async function crawlPage(url, siteFolderId) {
+  try {
+    const robotsTxt = await axios.get(new URL('/robots.txt', url).href);
+    if (robotsTxt.data.includes('Disallow: /')) {
+      console.log('⚠️ Robots.txt disallows crawling:', url);
+      return;
+    }
+  } catch (e) {}
+
+  const res = await axios.get(url, { timeout: 10000 });
+  const $ = cheerio.load(res.data);
+
+  const html = rebuildHtml($, url);
+  const filename = sanitize(url).replace(/[:\/?=&]/g, '_') + '.html';
+  const localPath = path.join(__dirname, 'temp', filename);
+  await fs.outputFile(localPath, html);
+  uploadQueue.push({ path: localPath, folderId: siteFolderId });
+
+  const text = $('body').text().replace(/\s+/g, ' ').trim();
+  const sentences = text.split(/[.!?]/).filter(Boolean).map(s => s.trim()).slice(0, 30);
+  const txtName = filename.replace('.html', '_sentences.txt');
+  const txtPath = path.join(__dirname, 'temp', txtName);
+  await fs.outputFile(txtPath, sentences.join('\n'));
+  uploadQueue.push({ path: txtPath, folderId: siteFolderId });
+
+  console.log('📄 Crawled:', url);
+} catch (err) {
+  console.error('❌ Error crawling', url, err.message);
+}
+
+async function uploadWorker() {
+  while (true) {
+    if (uploadQueue.length > 0) {
+      const file = uploadQueue.shift();
+      try {
+        await uploadToPCloud(file.path, file.folderId);
+        await fs.remove(file.path);
+      } catch (e) {
+        console.error('❌ Upload failed:', e.message);
+      }
+    }
+    await new Promise(res => setTimeout(res, 60000)); // 60 sec
+  }
+}
+
+async function crawlSite(url) {
+  const hostname = new URL(url).hostname.replace(/^www\./, '');
+  const folderId = await getFolderId(hostname);
+  await crawlPage(url, folderId);
+}
+
+// Web interface
+http.createServer((req, res) => {
+  if (req.url.startsWith('/crawl?url=')) {
+    const url = decodeURIComponent(req.url.split('=')[1]);
+    crawlSite(url);
+    res.end('✅ Crawling started: ' + url);
+  } else {
+    res.end('🌐 Fcrawler is live');
+  }
+}).listen(10000, () => {
+  console.log('🚀 Server running on http://localhost:10000/');
+});
+
+// Start
+await loginToPCloud();
+uploadWorker(); // keep uploading every 60 sec
