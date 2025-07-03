@@ -1,22 +1,14 @@
-import express from 'express';
+import http from 'http';
 import { crawlSite } from './fcrawler.js';
 
-const app = express();
-const PORT = process.env.PORT || 10000;
-
-// ✅ Serve static frontend if needed
-app.use(express.static('public'));
-
-// ✅ Home route
-app.get('/', (req, res) => {
-  res.send('🌍 Fcrawler is live and crawling.');
-});
-
-// ✅ Change this URL to target a different crawlable site
-const startUrl = 'https://dspace.mit.edu/handle/1721.1/12192';
-
-app.listen(PORT, async () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}/`);
-  console.log(`📄 Crawling: ${startUrl}`);
-  await crawlSite(startUrl);
+http.createServer((req, res) => {
+  if (req.url.startsWith('/crawl?url=')) {
+    const url = decodeURIComponent(req.url.split('=')[1]);
+    crawlSite(url);
+    res.end('✅ Crawling started: ' + url);
+  } else {
+    res.end('🌐 Fcrawler is live');
+  }
+}).listen(10000, () => {
+  console.log('🚀 Fcrawler running at http://localhost:10000/');
 });
