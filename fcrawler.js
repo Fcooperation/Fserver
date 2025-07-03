@@ -1,5 +1,5 @@
 import axios from 'axios';
-import cheerio from 'cheerio';
+import * as cheerio from 'cheerio';
 import fs from 'fs-extra';
 import path from 'path';
 import mime from 'mime-types';
@@ -11,13 +11,14 @@ import FormData from 'form-data';
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-// pCloud login
+// pCloud login credentials
 const PCLOUD_EMAIL = 'thefcooperation@gmail.com';
 const PCLOUD_PASSWORD = 'Onyedika';
 
 let accessToken = '';
 const uploadQueue = [];
 
+// Log into pCloud
 async function loginToPCloud() {
   const res = await axios.get('https://api.pcloud.com/login', {
     params: {
@@ -35,6 +36,7 @@ async function loginToPCloud() {
   console.log('✅ Logged into pCloud.');
 }
 
+// Get or create a folder
 async function getFolderId(folderName, parentFolderId = 0) {
   const res = await axios.get('https://api.pcloud.com/listfolder', {
     params: {
@@ -42,7 +44,10 @@ async function getFolderId(folderName, parentFolderId = 0) {
       folderid: parentFolderId
     }
   });
-  const folder = res.data.metadata.contents?.find(f => f.name === folderName && f.isfolder);
+
+  const folder = res.data.metadata.contents?.find(
+    f => f.name === folderName && f.isfolder
+  );
   if (folder) return folder.folderid;
 
   const createRes = await axios.get('https://api.pcloud.com/createfolder', {
@@ -52,9 +57,11 @@ async function getFolderId(folderName, parentFolderId = 0) {
       folderid: parentFolderId
     }
   });
+
   return createRes.data.metadata.folderid;
 }
 
+// Check if file already exists
 async function fileExistsInPCloud(folderId, filename) {
   const res = await axios.get('https://api.pcloud.com/listfolder', {
     params: {
@@ -62,9 +69,11 @@ async function fileExistsInPCloud(folderId, filename) {
       folderid: folderId
     }
   });
+
   return res.data.metadata.contents?.some(f => f.name === filename) ?? false;
 }
 
+// Upload a file to pCloud
 async function uploadToPCloud(filePath, folderId) {
   const filename = path.basename(filePath);
   const exists = await fileExistsInPCloud(folderId, filename);
@@ -92,6 +101,7 @@ async function uploadToPCloud(filePath, folderId) {
   }
 }
 
+// Rebuild links in HTML
 function rebuildHtml($, url) {
   $('a').each((_, el) => {
     const href = $(el).attr('href');
@@ -106,6 +116,7 @@ function rebuildHtml($, url) {
   return $.html();
 }
 
+// Crawl a single page
 async function crawlPage(url, siteFolderId) {
   try {
     if (url.includes('login') || url.includes('signup')) {
@@ -113,14 +124,13 @@ async function crawlPage(url, siteFolderId) {
       return;
     }
 
-    // robots.txt check
     try {
       const robotsTxt = await axios.get(new URL('/robots.txt', url).href);
       if (robotsTxt.data.includes('Disallow: /')) {
         console.log('⚠️ robots.txt disallows:', url);
         return;
       }
-    } catch (e) {
+    } catch {
       console.log('⚠️ No robots.txt found, continuing...');
     }
 
@@ -146,6 +156,7 @@ async function crawlPage(url, siteFolderId) {
   }
 }
 
+// Upload worker (60 sec delay)
 async function uploadWorker() {
   while (true) {
     if (uploadQueue.length > 0) {
@@ -157,17 +168,18 @@ async function uploadWorker() {
         console.error('❌ Upload failed:', e.message);
       }
     }
-    await new Promise(res => setTimeout(res, 60000)); // Every 60 seconds
+    await new Promise(res => setTimeout(res, 60000)); // wait 60 sec
   }
 }
 
+// Start crawling a site
 async function crawlSite(url) {
   const hostname = new URL(url).hostname.replace(/^www\./, '');
   const folderId = await getFolderId(hostname);
   await crawlPage(url, folderId);
 }
 
-// Web interface
+// HTTP Interface
 http.createServer((req, res) => {
   if (req.url.startsWith('/crawl?url=')) {
     const url = decodeURIComponent(req.url.split('=')[1]);
@@ -180,6 +192,6 @@ http.createServer((req, res) => {
   console.log('🚀 Server running on http://localhost:10000/');
 });
 
-// Start the engine
+// Init
 await loginToPCloud();
 uploadWorker();
