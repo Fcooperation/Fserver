@@ -179,19 +179,9 @@ async function crawlSite(url) {
   await crawlPage(url, folderId);
 }
 
-// HTTP Interface
-http.createServer((req, res) => {
-  if (req.url.startsWith('/crawl?url=')) {
-    const url = decodeURIComponent(req.url.split('=')[1]);
-    crawlSite(url);
-    res.end('✅ Crawling started: ' + url);
-  } else {
-    res.end('🌐 Fcrawler is live');
-  }
-}).listen(10000, () => {
-  console.log('🚀 Server running on http://localhost:10000/');
-});
+// Export for index.js
+export { crawlSite };
 
-// Init
+// Start system
 await loginToPCloud();
 uploadWorker();
